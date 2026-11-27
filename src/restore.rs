@@ -14,6 +14,8 @@ pub enum Component {
     Code,
     Neovim,
     Glaze,
+    Terminal,
+    Posh,
     Chrome,
     Firefox,
 }
@@ -23,6 +25,8 @@ impl Component {
             Self::Desktop => "Windows desktop",
             Self::Code => "Visual Studio Code",
             Self::Neovim => "Neovim",
+            Self::Terminal => "Windows Terminal",
+            Self::Posh => "Oh My Posh",
             Self::Glaze => "GlazeWM",
             Self::Chrome => "Chrome",
             Self::Firefox => "Firefox",

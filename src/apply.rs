@@ -24,13 +24,13 @@ fn edit_settings(
     backups: &Path,
     name: &str,
     edit: impl FnOnce(&str) -> Result<String>,
-) -> Result<()> {
+) -> Result<bool> {
     let original = read_optional(path)?;
     let input = std::str::from_utf8(original.as_deref().unwrap_or_default())
         .context("Expected UTF-8 settings")?;
     let output = edit(input)?;
     if Some(output.as_bytes()) == original.as_deref() {
-        return Ok(());
+        return Ok(false);
     }
     if let Some(bytes) = &original {
         atomic_write(&backups.join(name), bytes)?;
@@ -39,7 +39,8 @@ fn edit_settings(
         read_optional(path)? == original,
         "Settings changed during apply. Retry with the latest file."
     );
-    point.write(component, path, output.as_bytes())
+    point.write(component, path, output.as_bytes())?;
+    Ok(true)
 }
 
 #[cfg(any(windows, test))]
@@ -177,12 +178,14 @@ mod platform {
     pub fn desktop(point: &mut RestorePoint, root: &Path, t: &Theme) -> Result<String> {
         let image = wallpaper::render(&wallpaper::load(&t.wallpaper)?, t.effects);
         let photo = stored_asset(root, "renders", "jpg", &wallpaper::jpeg(&image)?)?;
-        let file = stored_asset(
-            root,
-            "desktop",
-            "theme",
-            &config::desktop_theme(t, photo.to_str().context("Invalid wallpaper filename")?)?,
-        )?;
+        let contents =
+            config::desktop_theme(t, photo.to_str().context("Invalid wallpaper filename")?)?;
+        let base = directories::BaseDirs::new().context("Find the Windows user theme folder")?;
+        let hash = crate::store::asset_hash(&contents);
+        let file = base
+            .data_local_dir()
+            .join("Microsoft/Windows/Themes")
+            .join(format!("WTE-{hash:016x}.theme"));
         if !point
             .changes
             .iter()
@@ -191,8 +194,8 @@ mod platform {
             let theme = crate::desktop::snapshot(root)?;
             point.remember(Change::Desktop { theme })?;
         }
-        open_theme(&file)?;
-        Ok("Sent the wallpaper, accent and appearance mode to Windows Personalization.".into())
+        point.write(Component::Desktop, &file, &contents)?;
+        crate::desktop::activate(&file, &photo, &t.name, open_theme)
     }
 
     pub fn open_theme(file: &Path) -> Result<()> {
@@ -401,7 +404,7 @@ mod platform {
             return Ok("Skipped. GlazeWM configuration was not found.".into());
         }
         ensure!(path.is_absolute(), "GLAZEWM_CONFIG_PATH must be absolute.");
-        edit_settings(
+        let changed = edit_settings(
             point,
             Component::Glaze,
             &path,
@@ -409,31 +412,114 @@ mod platform {
             "glazewm-config.yaml",
             |s| config::glazewm(s, t),
         )?;
-        Ok(if reload_glaze() {
-            "Updated and reloaded the window borders."
-        } else {
-            "Saved border colors. Use GlazeWM’s reload-config binding or restart it."
+        if !changed {
+            return Ok("Border colors already match.".into());
         }
-        .into())
+        Ok(reload_glaze())
     }
 
-    pub fn reload_glaze() -> bool {
-        if let Some(p) = env::var_os("ProgramFiles") {
-            let cli = PathBuf::from(p).join("glzr.io/GlazeWM/cli/glazewm.exe");
-            if cli.is_absolute() && cli.is_file() {
-                let status = Command::new(cli)
-                    .args(["command", "wm-reload-config"])
+    pub fn reload_glaze() -> String {
+        let dirs = env::var_os("ProgramFiles").into_iter().map(PathBuf::from);
+        let path = env::var_os("PATH").unwrap_or_default();
+        let cli = dirs
+            .flat_map(|p| [p.join("glzr.io/GlazeWM/cli"), p.join("glzr.io/cli")])
+            .chain(env::split_paths(&path))
+            .filter(|d| d.is_absolute())
+            .map(|d| d.join("glazewm.exe"))
+            .find(|p| p.is_file());
+        let run = |command| {
+            cli.as_ref().is_some_and(|exe| {
+                Command::new(exe)
+                    .args(["command", command])
                     .creation_flags(0x08000000)
                     .stdin(Stdio::null())
                     .stdout(Stdio::null())
                     .stderr(Stdio::null())
-                    .status();
-                if status.is_ok_and(|s| s.success()) {
-                    return true;
-                }
-            }
+                    .status()
+                    .is_ok_and(|s| s.success())
+            })
+        };
+        if !run("wm-reload-config") {
+            return "Saved the configuration. Reload GlazeWM to use it.".into();
         }
-        false
+        if !run("wm-redraw") {
+            return "Reloaded GlazeWM. Use its redraw binding if a tile needs resizing.".into();
+        }
+        "Reloaded the configuration and redrew the tiled windows.".into()
+    }
+
+    pub fn terminal(report: &mut Report, point: &mut RestorePoint, t: &Theme, backups: &Path) {
+        let Some(base) = directories::BaseDirs::new() else {
+            report.record(
+                "Windows Terminal",
+                Err(anyhow::anyhow!("Could not locate Local AppData")),
+            );
+            return;
+        };
+        terminal_settings(report, point, t, backups, base.data_local_dir());
+    }
+}
+
+#[cfg(any(windows, test))]
+fn terminal_settings(
+    report: &mut Report,
+    point: &mut RestorePoint,
+    t: &Theme,
+    backups: &Path,
+    local: &Path,
+) {
+    let mut found = false;
+    for (label, relative, backup) in [
+        (
+            "Windows Terminal",
+            "Packages/Microsoft.WindowsTerminal_8wekyb3d8bbwe/LocalState/settings.json",
+            "terminal-stable.json",
+        ),
+        (
+            "Windows Terminal Preview",
+            "Packages/Microsoft.WindowsTerminalPreview_8wekyb3d8bbwe/LocalState/settings.json",
+            "terminal-preview.json",
+        ),
+        (
+            "Windows Terminal Canary",
+            "Packages/Microsoft.WindowsTerminalCanary_8wekyb3d8bbwe/LocalState/settings.json",
+            "terminal-canary.json",
+        ),
+        (
+            "Windows Terminal (unpackaged)",
+            "Microsoft/Windows Terminal/settings.json",
+            "terminal-unpackaged.json",
+        ),
+    ] {
+        let path = local.join(relative);
+        match path.try_exists() {
+            Ok(false) => continue,
+            Err(e) => {
+                found = true;
+                report.record(label, Err(e.into()));
+                continue;
+            }
+            Ok(true) => found = true,
+        }
+        let result = edit_settings(point, Component::Terminal, &path, backups, backup, |s| {
+            crate::terminal::configure(s, t)
+        });
+        report.record(
+            label,
+            result.map(|changed| {
+                if changed {
+                    "Updated Terminal settings. Open a fresh tab to pick up profile changes.".into()
+                } else {
+                    "Terminal settings already match.".into()
+                }
+            }),
+        );
+    }
+    if !found {
+        report.record(
+            "Windows Terminal",
+            Ok("No settings file found. Open Terminal, save a setting and apply again.".into()),
+        );
     }
 }
 
@@ -452,6 +538,9 @@ fn desktop_components(point: &mut RestorePoint, report: &mut Report, root: &Path
     }
     if t.nvim {
         report.record("Neovim", platform::nvim(point, t));
+    }
+    if t.terminal || t.terminal_fit {
+        platform::terminal(report, point, t, &backups);
     }
     if t.glaze {
         report.record("GlazeWM", platform::glaze(point, t, &backups));
@@ -491,13 +580,22 @@ pub fn run(root: &Path, t: &Theme) -> Result<Report> {
     #[cfg(windows)]
     desktop_components(&mut point, &mut report, root, t);
     #[cfg(not(windows))]
-    if t.desktop || t.vscode || t.nvim || t.glaze {
+    if t.desktop || t.vscode || t.nvim || t.glaze || t.terminal || t.terminal_fit {
         report.entries.push(Entry {
             component: "Desktop integrations",
             detail: "These components require Windows.".into(),
             error: true,
             path: None,
         });
+    }
+    if t.posh {
+        match crate::terminal::export_prompt(&mut point, root, t) {
+            Ok(path) => report.entries.push(Entry {
+                component: Component::Posh.name(), error: false, path: Some(path),
+                detail: "Use this path as --config in your Oh My Posh initialization once. Reopen the shell after switching themes.".into(),
+            }),
+            Err(e) => report.record(Component::Posh.name(), Err(e)),
+        }
     }
     if t.chrome {
         report.browser(&mut point, Browser::Chrome, root, t);
@@ -525,9 +623,33 @@ pub fn restore(root: &Path) -> Result<Report> {
         .join("backups")
         .join(format!("restore-{}", crate::unique_id()));
     let mut restored = Vec::new();
+    // Switch away from the installed theme before deleting its file. On failure
+    // keep the desktop entries for a retry while restoring the other components.
+    #[cfg(windows)]
+    if let Some((i, theme)) = point.changes.iter().enumerate().find_map(|(i, c)| match c {
+        Change::Desktop { theme } => Some((i, theme)),
+        _ => None,
+    }) {
+        match crate::desktop::restore(theme, platform::open_theme) {
+            Ok(()) => {
+                point.finish(i)?;
+                restored.push(Component::Desktop);
+            }
+            Err(e) => report.record(Component::Desktop.name(), Err(e)),
+        }
+    }
     for i in (0..point.changes.len()).rev() {
         let change = &point.changes[i];
         let component = change.component();
+        #[cfg(windows)]
+        if component == Component::Desktop
+            && report
+                .entries
+                .iter()
+                .any(|e| e.component == component.name() && e.error)
+        {
+            continue;
+        }
         let result = match change {
             Change::Directory { path, .. } if point.changes[i+1..].iter().any(|c|
                 matches!(c, Change::File { path: child, .. } | Change::Directory { path: child, .. } if child.starts_with(path))) => continue,
@@ -547,7 +669,7 @@ pub fn restore(root: &Path) -> Result<Report> {
                     .map_err(|e| anyhow::anyhow!("{}: {e:#}", path.display()))
             }
             #[cfg(windows)]
-            Change::Desktop { theme } => crate::desktop::restore(theme, platform::open_theme),
+            Change::Desktop { .. } => continue,
             #[cfg(windows)]
             Change::Extension { mode } => platform::remove_extension(*mode),
             #[cfg(not(windows))]
@@ -572,16 +694,22 @@ pub fn restore(root: &Path) -> Result<Report> {
             continue;
         }
         let detail = match component {
-            Component::Desktop => "Sent the previous theme to Windows Personalization.",
+            Component::Desktop => "Restored the previous desktop theme.",
             Component::Code => "Restored your previous VS Code setup. Reload the editor window.",
             Component::Neovim => {
                 "Restored the previous files. Restart Neovim to load your original configuration."
             }
             #[cfg(windows)]
-            Component::Glaze if platform::reload_glaze() => {
-                "Restored the configuration and reloaded GlazeWM."
+            Component::Glaze => {
+                report.record(component.name(), Ok(platform::reload_glaze()));
+                continue;
             }
+            #[cfg(not(windows))]
             Component::Glaze => "Restored the original configuration. Reload GlazeWM.",
+            Component::Terminal => "Restored your Windows Terminal settings. Open a fresh tab.",
+            Component::Posh => {
+                "Restored the previous prompt file. Reopen the shell. If your profile points directly to the removed WTE file, reselect your previous Oh My Posh config."
+            }
             Component::Chrome => {
                 "Restored the export files. If you loaded a WTE theme, select your previous theme in Chrome’s Appearance settings."
             }
@@ -608,6 +736,52 @@ mod tests {
     use super::*;
     use crate::theme::Photo;
     use std::fs;
+
+    #[test]
+    fn terminal_and_prompt_restore_together_after_multiple_themes() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        let root = dir.path().join("WTE");
+        let local = dir.path().join("Local");
+        let path = local.join("Microsoft/Windows Terminal/settings.json");
+        let preview = local.join(
+            "Packages/Microsoft.WindowsTerminalPreview_8wekyb3d8bbwe/LocalState/settings.json",
+        );
+        let original = b"{\r\n // preserve this comment\r\n \"initialCols\": 220, \"profiles\": {\"defaults\": {\"padding\": \"8,8,100,8\"}},\r\n}";
+        atomic_write(&path, original)?;
+        atomic_write(&preview, b"{oops")?;
+        let mut point = RestorePoint::load(&root)?;
+        let mut prompt = PathBuf::new();
+        for photo in [Photo::Sienna, Photo::BlueHour] {
+            let mut report = Report::default();
+            let mut theme = Theme::preset(photo);
+            theme.terminal_fit = true;
+            terminal_settings(
+                &mut report,
+                &mut point,
+                &theme,
+                &root.join("backups/test"),
+                &local,
+            );
+            assert_eq!(report.entries.len(), 2);
+            assert!(
+                report
+                    .entries
+                    .iter()
+                    .any(|e| e.error && e.component == "Windows Terminal Preview")
+            );
+            prompt = crate::terminal::export_prompt(&mut point, &root, &theme)?;
+            assert_eq!(
+                serde_json::from_slice::<serde_json::Value>(&fs::read(&prompt)?)?["palette"]["pathBg"],
+                crate::theme::hex(theme.palette.accent)
+            );
+            assert!(fs::read_to_string(&path)?.contains("// preserve this comment"));
+        }
+        assert!(restore(&root)?.entries.iter().all(|e| !e.error));
+        assert_eq!(fs::read(&path)?, original);
+        assert_eq!(fs::read(preview)?, b"{oops");
+        assert!(!prompt.exists());
+        Ok(())
+    }
 
     #[test]
     fn vscode_updates_owned_keys_and_preserves_jsonc_on_repeat() -> Result<()> {
@@ -829,6 +1003,13 @@ mod tests {
                 settings["window_effects"]["other_windows"]["border"]["color"],
                 crate::theme::hex(t.palette.surface)
             );
+            let original: serde_yaml_ng::Value = serde_yaml_ng::from_str(input)?;
+            for key in ["focused_window", "other_windows"] {
+                assert_eq!(
+                    settings["window_effects"][key]["border"]["enabled"],
+                    original["window_effects"][key]["border"]["enabled"]
+                );
+            }
             for line in input.lines().filter(|l| l.trim_start().starts_with('#')) {
                 assert!(output.contains(line));
             }

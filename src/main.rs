@@ -12,6 +12,7 @@ mod nvim;
 mod palette;
 mod restore;
 mod store;
+mod terminal;
 mod theme;
 mod ui;
 mod wallpaper;

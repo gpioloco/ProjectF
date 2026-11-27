@@ -11,23 +11,23 @@ use jsonc_parser::{
 use std::str::FromStr;
 use yaml_edit::{Mapping, YamlFile};
 
-fn unique(obj: &CstObject, key: &str) -> Result<()> {
+pub(crate) fn unique(obj: &CstObject, key: &str) -> Result<()> {
     ensure!(
         obj.properties()
             .iter()
             .filter(|p| p.decoded_name().as_deref() == Some(key))
             .count()
             <= 1,
-        "Duplicate VS Code setting '{key}'"
+        "Duplicate setting '{key}'"
     );
     Ok(())
 }
-fn object(obj: &CstObject, key: &str) -> Result<CstObject> {
+pub(crate) fn object(obj: &CstObject, key: &str) -> Result<CstObject> {
     unique(obj, key)?;
     obj.object_value_or_create(key)
         .with_context(|| format!("Expected an object for '{key}'"))
 }
-fn set(obj: &CstObject, key: &str, value: impl Into<CstInputValue>) -> Result<()> {
+pub(crate) fn set(obj: &CstObject, key: &str, value: impl Into<CstInputValue>) -> Result<()> {
     unique(obj, key)?;
     let value = value.into();
     if let Some(p) = obj.get(key) {
@@ -38,7 +38,7 @@ fn set(obj: &CstObject, key: &str, value: impl Into<CstInputValue>) -> Result<()
     Ok(())
 }
 
-pub fn vscode(input: &str, t: &Theme) -> Result<String> {
+pub(crate) fn jsonc(input: &str) -> Result<(&str, CstRootNode)> {
     let options = ParseOptions {
         allow_comments: true,
         allow_trailing_commas: true,
@@ -54,7 +54,11 @@ pub fn vscode(input: &str, t: &Theme) -> Result<String> {
     let (bom, input) = input
         .strip_prefix('\u{feff}')
         .map_or(("", input), |s| ("\u{feff}", s));
-    let root = CstRootNode::parse(input, &options)?;
+    Ok((bom, CstRootNode::parse(input, &options)?))
+}
+
+pub fn vscode(input: &str, t: &Theme) -> Result<String> {
+    let (bom, root) = jsonc(input)?;
     let obj = root
         .object_value_or_create()
         .context("VS Code settings must be a JSON object")?;
@@ -164,10 +168,8 @@ pub fn glazewm(input: &str, t: &Theme) -> Result<String> {
     ] {
         let window = submap(&effects, key)?;
         let border = submap(&window, "border")?;
-        border.set("enabled", true);
         border.set("color", hex(color).as_str());
         let expected_border = &mut expected["window_effects"][key]["border"];
-        expected_border["enabled"] = true.into();
         expected_border["color"] = hex(color).into();
     }
     let output = file.to_string();

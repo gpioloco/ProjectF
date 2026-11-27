@@ -105,6 +105,12 @@ pub struct Theme {
     pub nvim: bool,
     pub glaze: bool,
     #[serde(default)]
+    pub terminal: bool,
+    #[serde(default)]
+    pub terminal_fit: bool,
+    #[serde(default)]
+    pub posh: bool,
+    #[serde(default)]
     pub chrome: bool,
     #[serde(default)]
     pub firefox: bool,
@@ -181,6 +187,9 @@ impl Theme {
             vscode: true,
             nvim: true,
             glaze: true,
+            terminal: true,
+            terminal_fit: false,
+            posh: false,
             chrome: false,
             firefox: false,
             code_theme: String::new(),
@@ -247,7 +256,15 @@ impl Theme {
             "Effect strength must be between 0 and 100."
         );
         ensure!(
-            self.desktop || self.vscode || self.nvim || self.glaze || self.chrome || self.firefox,
+            self.desktop
+                || self.vscode
+                || self.nvim
+                || self.glaze
+                || self.terminal
+                || self.terminal_fit
+                || self.posh
+                || self.chrome
+                || self.firefox,
             "Select at least one component."
         );
         Ok(())

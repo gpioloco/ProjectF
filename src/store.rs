@@ -194,13 +194,17 @@ fn replace_existing(tmp: NamedTempFile, path: &Path, _meta: fs::Metadata) -> Res
     Ok(())
 }
 
-pub fn stored_asset(root: &Path, folder: &str, extension: &str, data: &[u8]) -> Result<PathBuf> {
+pub fn asset_hash(data: &[u8]) -> u64 {
     use std::hash::Hasher;
     let mut hash = std::collections::hash_map::DefaultHasher::new();
     hash.write(data);
+    hash.finish()
+}
+
+pub fn stored_asset(root: &Path, folder: &str, extension: &str, data: &[u8]) -> Result<PathBuf> {
     let path = root
         .join(folder)
-        .join(format!("{:016x}.{extension}", hash.finish()));
+        .join(format!("{:016x}.{extension}", asset_hash(data)));
     if read_optional(&path)?.as_deref() != Some(data) {
         atomic_write(&path, data)?;
     }
@@ -217,7 +221,15 @@ mod tests {
         let mut original = Theme::preset(Photo::Sienna);
         original.id = "custom-legacy".into();
         let mut legacy = serde_json::to_value(&original)?;
-        for key in ["mode", "alternate_palette", "chrome", "firefox"] {
+        for key in [
+            "mode",
+            "alternate_palette",
+            "chrome",
+            "firefox",
+            "posh",
+            "terminal",
+            "terminal_fit",
+        ] {
             legacy.as_object_mut().unwrap().remove(key);
         }
         let dir = tempfile::tempdir()?;
@@ -234,6 +246,7 @@ mod tests {
         assert_eq!(library.themes[0].palette, original.palette);
         library.app_mode = Appearance::Dark;
         let theme = &mut library.themes[0];
+        assert!(!theme.posh && !theme.terminal && !theme.terminal_fit);
         theme.set_mode(Appearance::Light);
         theme.palette.accent = [40, 80, 100];
         let custom_light = theme.palette.clone();

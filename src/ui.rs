@@ -478,6 +478,8 @@ impl App {
             (selected.vscode, "VS Code"),
             (selected.nvim, "Neovim"),
             (selected.glaze, "GlazeWM"),
+            (selected.terminal || selected.terminal_fit, "Terminal"),
+            (selected.posh, "Oh My Posh"),
             (selected.chrome, "Chrome"),
             (selected.firefox, "Firefox"),
         ]
@@ -825,7 +827,14 @@ impl App {
                 if t.chrome || t.firefox {
                     ui.label(muted("Apply exports browser themes. Load them in each browser using the paths in Apply results."));
                 }
-                ui.checkbox(&mut t.glaze,"GlazeWM borders");
+                ui.checkbox(&mut t.terminal, "Windows Terminal colors");
+                ui.checkbox(&mut t.terminal_fit, "Fit terminal to tiled windows")
+                    .on_hover_text("Align inherited font metrics with the startup profile, remove padding, hide the scrollbar and allow smooth resizing. Restore recovers your original settings.");
+                ui.checkbox(&mut t.posh, "Oh My Posh prompt");
+                if t.posh {
+                    ui.label(muted("Point your shell’s Oh My Posh configuration at the exported file once. Apply results includes the path."));
+                }
+                ui.checkbox(&mut t.glaze,"GlazeWM border colors");
                 if t.glaze {
                     border_picker(ui,"Focused",t.palette.accent,&mut t.focused);
                     border_picker(ui,"Unfocused",t.palette.surface,&mut t.unfocused);

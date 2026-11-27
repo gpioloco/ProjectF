@@ -1,6 +1,6 @@
 # WTE · Windows Theme Engine
 
-WTE is a portable Rust app for Windows 11. Apply one palette across your wallpaper, Windows appearance, VS Code, Neovim and GlazeWM borders. Export matching Chrome and Firefox themes. Start from one of three bundled presets or let WTE pick an accent and build a theme from a photograph. VS Code and Neovim share ExoVoid syntax colors in both modes, with darker ink for light backgrounds.
+WTE is a portable Rust app for Windows 11. Apply one palette across your wallpaper, Windows appearance, VS Code, Neovim, Windows Terminal and GlazeWM borders. Export a matching Oh My Posh prompt and themes for Chrome and Firefox. Start from one of three bundled presets or let WTE pick an accent and build a theme from a photograph. VS Code and Neovim share ExoVoid syntax colors in both modes, with darker ink for light backgrounds.
 
 [Run the portable app](#run-the-portable-app) · [Build from source](#build-from-source) · [Apply a preset](#apply-a-preset) · [Restore previous settings](#restore-previous-settings) · [Create a custom theme](#create-a-custom-theme) · [Browser setup](#load-a-browser-theme) · [Screenshots](#screenshot-gallery)
 
@@ -8,7 +8,7 @@ WTE is a portable Rust app for Windows 11. Apply one palette across your wallpap
 
 ## Run the portable app
 
-Extract `WTE-0.4.0-windows-x64.zip` and double-click `wte.exe`. WTE opens in **Library**. Choose **App · Light** or **App · Dark** in the top bar to change the WTE window immediately. It remembers this preference when you reopen it. Each integration is optional. The apply results identify any enabled integration WTE could not find.
+Extract `WTE-0.5.0-windows-x64.zip` and double-click `wte.exe`. WTE opens in **Library**. Choose **App · Light** or **App · Dark** in the top bar to change the WTE window immediately. It remembers this preference when you reopen it. Each integration is optional. The apply results identify any enabled integration WTE could not find.
 
 ## Build from source
 
@@ -47,7 +47,7 @@ Run `cargo test --locked` from the repository root. With `nvim` on `PATH`, `carg
 | Blue Hour | The Dolomites above St. Magdalena at dusk | Midnight blue, periwinkle and ice |
 
 1. In **Library**, select a card in **Collection**. Switch between **Wallpaper** and **Editor** in the preview to see the photograph and a code sample in the selected palette.
-2. Select **Apply theme**. Windows may open Personalization to finish the desktop change.
+2. Select **Apply theme**. WTE asks Windows to select the new desktop theme and checks the active theme. If Windows still needs a selection, **Apply results** gives the exact name to choose in Personalization.
 3. Read **Apply results** for each enabled component. Restart open Neovim sessions after the first application. If GlazeWM reports that it saved the colors and requests a reload, use your GlazeWM reload binding or restart it.
 
 ## Create a custom theme
@@ -69,16 +69,43 @@ Choose **Save theme** to copy the imported wallpaper to the local library and re
 
 | Component | Interface and scope |
 | --- | --- |
-| Windows desktop | WTE opens a local `.theme` file through the registered Windows shell handler. The file specifies a fill-mode wallpaper, an explicit accent color, and the light or dark appearance for Windows and apps. Personalization and organizational policy control the final desktop appearance. [Microsoft theme file format](https://learn.microsoft.com/en-us/windows/win32/controls/themesfileformat-overview) |
+| Windows desktop | WTE installs a local `.theme` in the current user’s Windows Themes folder and opens it through the registered shell handler. It checks whether Windows activated it. If selection is pending, WTE applies the wallpaper directly with `IDesktopWallpaper`. Windows controls confirmation for the full accent and appearance change. [Windows wallpaper API](https://learn.microsoft.com/en-us/windows/win32/api/shobjidl_core/nf-shobjidl_core-idesktopwallpaper-setwallpaper) · [Microsoft theme file format](https://learn.microsoft.com/en-us/windows/win32/controls/themesfileformat-overview) |
 | VS Code | WTE edits the default stable profile at `%APPDATA%\Code\User\settings.json`. Dark themes use **ExoVoid Classic Syntax - Dark Soft Blue**. Light themes use **WTE ExoVoid Light**, which keeps the same TextMate scopes, semantic token rules and font styles, and darkens the foreground colors. WTE scopes the palette overrides to the selected base. WTE preserves comments, unrelated settings and other theme scopes. Named profiles, workspace settings and automatic theme selection can take precedence. [VS Code theme settings](https://code.visualstudio.com/docs/configure/themes) |
 | Neovim | WTE asks the installed Neovim for its config and data directories. If the executable is missing, it looks for an existing profile in Local and Roaming AppData, including `NVIM_APPNAME` and XDG overrides. It writes the colorscheme and its loader under `stdpath('data')/site/pack/wte/start/wte` and adds `after/plugin/wte-theme-engine.lua` under `stdpath('config')` for plugin managers such as lazy.nvim. Classic highlights, Tree-sitter captures and LSP token groups use colors from the same ExoVoid theme. After the initial restart, changes load on startup or when the frontend delivers `FocusGained`. [Neovim packages](https://neovim.io/doc/user/pack/) |
-| GlazeWM v3 | WTE updates the enabled flag and color for focused and unfocused borders in `%USERPROFILE%\.glzr\glazewm\config.yaml` or the absolute path in `GLAZEWM_CONFIG_PATH`. It requests a reload through the CLI for a standard Program Files installation. Border effects require Windows 11. [GlazeWM configuration](https://github.com/glzr-io/glazewm#config-window-effects) |
+| GlazeWM v3 | WTE edits the colors of the focused and unfocused borders in `%USERPROFILE%\.glzr\glazewm\config.yaml` or the absolute path in `GLAZEWM_CONFIG_PATH`. The existing border enablement, tile gaps and window rules are preserved. When colors change, WTE requests a reload and redraw through the GlazeWM CLI. Border effects require Windows 11. [GlazeWM configuration](https://github.com/glzr-io/glazewm#config-window-effects) |
+| Windows Terminal | WTE updates the named color scheme, profile defaults and explicit profile color overrides in existing Stable, Preview, Canary and unpackaged settings. It preserves JSONC comments. Presets include Terminal colors. Themes saved before 0.5 can opt in from the editor. [Windows Terminal settings paths](https://learn.microsoft.com/en-us/windows/terminal/faq#where-can-i-find-the-settings-file) |
+| Oh My Posh | Exports a local prompt with a path, Git branch and command marker. Its stable filename lets the same shell profile follow subsequent WTE themes. [Oh My Posh configuration](https://ohmyposh.dev/docs/installation/customize) |
 | Chrome | Exports a Manifest V3 theme folder with colors for the frame, toolbar, tabs, address bar and new tab page. [Chrome theme format](https://developer.chrome.com/docs/extensions/develop/ui/themes) |
 | Firefox | Exports a static WebExtension theme as a single XPI with colors for the frame, toolbar, tabs, address bar and new tab page. It declares the theme’s light or dark color scheme. [Firefox theme format](https://developer.mozilla.org/en-US/docs/Mozilla/Add-ons/WebExtensions/manifest.json/theme) |
 
 ### First use with VS Code
 
 On **Apply theme**, WTE checks for the selected ExoVoid base. If needed, it passes the bundled upstream 1.4.0 VSIX for dark mode, or a locally generated WTE ExoVoid Light VSIX for light mode, to VS Code’s extension manager. Both packages are declarative and work offline. If WTE cannot find the CLI, **Apply results** shows the local file to select with **Extensions: Install from VSIX…**. Organization extension policies apply. A named editor override skips this installation step.
+
+## Fit a tiled Windows Terminal
+
+If Neovim and lazygit both leave a strip inside the right window border, choose **Edit theme → Components → Fit terminal to tiled windows**, then **Save theme → Apply theme**. Open a fresh Terminal window with the affected profile. This option removes Terminal padding, hides the scrollbar and turns off character-grid snapping. It also updates padding and scrollbar overrides on individual profiles and fills missing default font metrics from the startup profile. This covers a known difference between the profile used to size a new window and the defaults used by directly launched console programs. [Terminal startup sizing discussion](https://github.com/microsoft/terminal/issues/18872)
+
+**Windows Terminal colors** can be switched independently. **Library → Restore** recovers the previous settings. [Terminal profile appearance](https://learn.microsoft.com/en-us/windows/terminal/customize-settings/profile-appearance) · [Terminal resize settings](https://learn.microsoft.com/en-us/windows/terminal/customize-settings/interaction#snap-window-resizing-to-character-grid)
+
+To narrow down a remaining strip, compare a new floating Terminal window with the same profile tiled in GlazeWM. In PowerShell, `[Console]::WindowWidth` reports the number of columns available to an application. A difference between the two windows helps distinguish a tiling issue from a Terminal profile setting.
+
+## Use the Oh My Posh prompt
+
+Enable **Oh My Posh prompt** in the theme editor, save and apply. **Apply results → Copy path** gives the generated configuration. To connect an existing PowerShell setup once, wrap the Oh My Posh initialization in your PowerShell profile as shown below. Put your current initialization line in the `else` branch so Restore brings your usual prompt back. If your current line uses a named theme or a custom path, keep those arguments in that branch.
+
+```powershell
+$wtePrompt = Join-Path $env:LOCALAPPDATA 'WTE\prompt\wte.omp.json'
+if (Test-Path -LiteralPath $wtePrompt) {
+    oh-my-posh init pwsh --config $wtePrompt | Invoke-Expression
+} else {
+    oh-my-posh init pwsh | Invoke-Expression
+}
+```
+
+![Canopy prompt preview rendered by Oh My Posh, showing the project path and Git branch](docs/screenshots/oh-my-posh.png)
+
+Open a new shell after applying a theme. WTE writes the local prompt file. Your shell profile controls initialization. Other supported shells can use the same file with their usual `--config` option. [Oh My Posh shell setup](https://ohmyposh.dev/docs/installation/customize)
 
 ## Load a browser theme
 
@@ -96,8 +123,9 @@ Choose **Library → Restore → Restore settings**. WTE remembers each componen
 | Component | What to expect after Restore |
 | --- | --- |
 | Windows desktop | WTE opens a saved copy of your previous desktop theme, through Windows Personalization. It restores the wallpaper, accent and appearance mode, and reapplies separately assigned monitor wallpapers. |
-| VS Code and GlazeWM | WTE restores the original config files byte for byte and removes a settings file it created. It asks VS Code to uninstall any theme extension it installed. Reload the editor window. WTE requests a GlazeWM reload when the CLI is available. |
+| Windows Terminal, VS Code and GlazeWM | WTE restores the original config files byte for byte and removes a settings file it created. It asks VS Code to uninstall any theme extension it installed. Reload the editor window. WTE requests a GlazeWM reload when the CLI is available. |
 | Neovim | WTE restores existing files and removes the package files and startup hook it added. Restart Neovim. To check the detected profile, compare the paths in **Apply results** with `:echo stdpath('config')` and `:echo stdpath('data')`. |
+| Oh My Posh | WTE restores the prior contents of the exported prompt file, or removes it if WTE created it. With the conditional setup above, the next shell uses your previous initialization. |
 | Chrome and Firefox | WTE restores the exported files. If you activated a theme in the browser, reselect your previous theme in Chrome’s **Appearance** settings or Firefox’s **Add-ons and themes**. |
 
 WTE stores its restore point under `%LOCALAPPDATA%\WTE`. If you edited a file after applying a theme, Restore saves its current contents under `backups\restore-<id>\` before replacing it. **Restore results** lists the backup location and any component that needs another attempt. You can run Restore again after resolving an error.

@@ -126,6 +126,7 @@ mod tests {
         t.vscode = false;
         t.nvim = false;
         t.glaze = false;
+        t.terminal = false;
         assert!(t.validate().is_err());
         t.chrome = true;
         t.name = r#"An "Alpine" morning"#.into();

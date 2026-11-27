@@ -13,7 +13,7 @@ use windows::{
             CLSCTX_ALL, COINIT_APARTMENTTHREADED, CoCreateInstance, CoInitializeEx, CoTaskMemFree,
             CoUninitialize,
         },
-        UI::Shell::{DesktopWallpaper, IDesktopWallpaper},
+        UI::Shell::{DWPOS_FILL, DesktopWallpaper, IDesktopWallpaper},
     },
     core::{PCWSTR, PWSTR},
 };
@@ -247,13 +247,124 @@ fn snapshot_wallpaper(directory: &Path, mut monitors: Vec<MonitorWallpaper>) -> 
     save_wallpaper(Path::new(&text(&buf)), directory.join("wallpaper"))
 }
 
+const THEMES: &str = r"Software\Microsoft\Windows\CurrentVersion\Themes";
+
+fn current_theme() -> Result<Option<PathBuf>> {
+    string(THEMES, "CurrentTheme")?
+        .map(|v| expanded(&v))
+        .transpose()
+}
+
+fn is_current(requested: &Path) -> Result<bool> {
+    let Some(active) = current_theme()? else {
+        return Ok(false);
+    };
+    if active == requested {
+        return Ok(true);
+    }
+    // Windows may rewrite the selected file as Custom.theme, resolving indirect
+    // display names and changing the encoding. Compare the effective fields too.
+    if !active.try_exists()? {
+        return Ok(false);
+    }
+    same_theme_file(&active, requested)
+}
+
+fn same_theme_file(active: &Path, requested: &Path) -> Result<bool> {
+    if fs::read(active)? == fs::read(requested)? {
+        return Ok(true);
+    }
+    let actual = Ini(wide(active));
+    let wanted = Ini(wide(requested));
+    let wallpaper = wanted.get(r"Control Panel\Desktop", "Wallpaper");
+    if wallpaper.is_empty() || !Path::new(&wallpaper).is_absolute() {
+        return Ok(false);
+    }
+    if Path::new(&actual.get(r"Control Panel\Desktop", "Wallpaper")) != Path::new(&wallpaper) {
+        return Ok(false);
+    }
+    for key in [
+        "ColorizationColor",
+        "AppMode",
+        "SystemMode",
+        "AutoColorization",
+    ] {
+        let expected = wanted.get("VisualStyles", key);
+        if !expected.is_empty()
+            && !actual
+                .get("VisualStyles", key)
+                .eq_ignore_ascii_case(&expected)
+        {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
+fn wait_for_theme(theme: &Path) -> Result<bool> {
+    let until = std::time::Instant::now() + std::time::Duration::from_secs(3);
+    loop {
+        if is_current(theme)? {
+            return Ok(true);
+        }
+        if std::time::Instant::now() >= until {
+            return Ok(false);
+        }
+        std::thread::sleep(std::time::Duration::from_millis(150));
+    }
+}
+
+pub fn activate(
+    theme: &Path,
+    wallpaper: &Path,
+    name: &str,
+    open: impl FnOnce(&Path) -> Result<()>,
+) -> Result<String> {
+    if is_current(theme).unwrap_or(false)
+        && with_desktop(|desktop| {
+            let active = owned_string(unsafe { desktop.GetWallpaper(PCWSTR::null())? })?;
+            Ok(Path::new(&active) == wallpaper)
+        })
+        .unwrap_or(false)
+    {
+        return Ok(format!("WTE {name} is already active."));
+    }
+    let handoff = open(theme);
+    if handoff.is_ok() && wait_for_theme(theme).unwrap_or(false) {
+        return Ok(format!("Windows selected WTE {name}."));
+    }
+    // Wallpaper has its own documented setter. The shell owns full-theme selection.
+    with_desktop(|desktop| {
+        unsafe {
+            desktop.SetPosition(DWPOS_FILL)?;
+            desktop.SetWallpaper(PCWSTR::null(), PCWSTR(wide(wallpaper).as_ptr()))?;
+        }
+        Ok(())
+    }).with_context(|| format!("Windows did not confirm the theme or accept its wallpaper. Select WTE {name} in Personalization ({})", theme.display()))?;
+    if let Err(error) = handoff {
+        anyhow::bail!(
+            "Wallpaper applied. Opening the theme failed: {error:#}. Select WTE {name} in Personalization for the accent and mode."
+        );
+    }
+    Ok(format!(
+        "Wallpaper applied. Windows has not confirmed the full theme. If needed, select WTE {name} in Personalization for its accent and mode."
+    ))
+}
+
 pub fn restore(theme: &Path, open: impl FnOnce(&Path) -> Result<()>) -> Result<()> {
+    if !is_current(theme)? {
+        open(theme)?;
+        ensure!(
+            wait_for_theme(theme)?,
+            "Windows has not confirmed the saved theme. Open {} in Personalization, then retry Restore.",
+            theme.display()
+        );
+    }
     let Some(data) = crate::store::read_optional(&theme.with_file_name("monitors.json"))? else {
-        return open(theme);
+        return Ok(());
     };
     let monitors: Vec<MonitorWallpaper> = serde_json::from_slice(&data)?;
     let marker = PathBuf::from(Ini(wide(theme)).get(r"Control Panel\Desktop", "Wallpaper"));
-    open(theme)?;
     with_desktop(|desktop| {
         // The shell applies .theme files asynchronously. Wait until Windows
         // reports our snapshot wallpaper before replacing individual monitors.
@@ -282,7 +393,6 @@ pub fn restore(theme: &Path, open: impl FnOnce(&Path) -> Result<()>) -> Result<(
 }
 
 pub fn snapshot(root: &Path) -> Result<PathBuf> {
-    const THEMES: &str = r"Software\Microsoft\Windows\CurrentVersion\Themes";
     const DESKTOP: &str = r"Control Panel\Desktop";
     let folder = root.join("restore-desktop");
     fs::create_dir_all(&folder)?;
@@ -291,9 +401,7 @@ pub fn snapshot(root: &Path) -> Result<PathBuf> {
         .tempdir_in(folder)?;
     let directory = pending.path();
     let target = directory.join("previous.theme");
-    let source = string(THEMES, "CurrentTheme")?
-        .map(|v| expanded(&v))
-        .transpose()?;
+    let source = current_theme()?;
     let base = source
         .filter(|p| p.is_file())
         .or_else(|| {
@@ -360,6 +468,26 @@ pub fn snapshot(root: &Path) -> Result<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn recognizes_a_rewritten_theme_and_checks_its_accent_and_mode() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        let wanted = dir.path().join("selected.theme");
+        let active = dir.path().join("Custom.theme");
+        let data = "[Theme]\r\nDisplayName=WTE Demo\r\n[Control Panel\\Desktop]\r\nWallpaper=C:\\Pictures\\a.jpg\r\n[VisualStyles]\r\nColorizationColor=0xff223344\r\nAppMode=Dark\r\nSystemMode=Dark\r\n";
+        fs::write(&wanted, data)?;
+        fs::write(&active, data.replace("WTE Demo", "Custom"))?;
+        assert!(same_theme_file(&active, &wanted)?);
+        for (from, to) in [
+            ("Dark", "Light"),
+            ("ff223344", "ff000000"),
+            ("a.jpg", "b.jpg"),
+        ] {
+            fs::write(&active, data.replace(from, to))?;
+            assert!(!same_theme_file(&active, &wanted)?);
+        }
+        Ok(())
+    }
 
     #[test]
     fn preserves_distinct_per_monitor_wallpapers_when_windows_replaces_the_sources() -> Result<()> {
