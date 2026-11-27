@@ -3,7 +3,7 @@ use crate::{
     design::*,
     palette,
     store::{Library, Store},
-    theme::{Effects, Palette, Photo, Theme, Wallpaper, hex},
+    theme::{Appearance, Effects, Palette, Photo, Theme, Wallpaper, hex},
     wallpaper,
 };
 use anyhow::{Context as _, Result};
@@ -236,11 +236,12 @@ impl App {
         });
     }
     fn header(&mut self, ctx: &eframe::egui::Context) {
+        let style = ctx.style();
         TopBottomPanel::top("masthead")
             .frame(
                 Frame::new()
-                    .fill(WHITE)
-                    .stroke(Stroke::new(1.0_f32, LINE))
+                    .fill(style.visuals.window_fill)
+                    .stroke(style.visuals.widgets.noninteractive.bg_stroke)
                     .inner_margin(Margin::symmetric(30, 0)),
             )
             .show(ctx, |ui| {
@@ -250,22 +251,24 @@ impl App {
                     logo(ui.painter(), mark);
                     ui.label(title("WTE", 28.0));
                     ui.add_space(2.0);
-                    ui.label(muted("Windows Theme Engine"));
-                    ui.add_space(22.0);
+                    if ui.available_width() > 780.0 {
+                        ui.label(muted("Windows Theme Engine"));
+                        ui.add_space(22.0);
+                    }
                     for (page, label) in
                         [(Page::Library, "Library"), (Page::Editor, "Theme editor")]
                     {
                         let active = self.page == page;
                         let resp = ui.add(
                             Button::new(RichText::new(label).font(strong(14.5)).color(if active {
-                                GREEN
+                                ui.visuals().hyperlink_color
                             } else {
-                                MUTED
+                                ui.visuals().weak_text_color()
                             }))
                             .fill(if active {
-                                Color32::from_rgb(232, 239, 227)
+                                ui.visuals().widgets.inactive.bg_fill
                             } else {
-                                WHITE
+                                ui.visuals().window_fill
                             })
                             .stroke(Stroke::NONE)
                             .corner_radius(5),
@@ -281,6 +284,32 @@ impl App {
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                         if button(ui, "+   New theme", true).clicked() {
                             self.start_edit(true);
+                        }
+                        let mut mode = self.library.app_mode;
+                        ComboBox::from_id_salt("app-appearance")
+                            .selected_text(format!("App · {}", mode.label()))
+                            .show_ui(ui, |ui| {
+                                for value in [Appearance::Light, Appearance::Dark] {
+                                    ui.selectable_value(&mut mode, value, value.label());
+                                }
+                            })
+                            .response
+                            .on_hover_text("Appearance of the WTE window");
+                        if mode != self.library.app_mode {
+                            let mut library = self.library.clone();
+                            library.app_mode = mode;
+                            match self.store.save(&library) {
+                                Ok(()) => {
+                                    self.library = library;
+                                    appearance(ctx, mode);
+                                }
+                                Err(e) => {
+                                    self.message = Some((
+                                        "Could not save app appearance".into(),
+                                        format!("{e:#}"),
+                                    ))
+                                }
+                            }
                         }
                     });
                 });
@@ -333,11 +362,11 @@ impl App {
         info.spacing_mut().item_spacing.y = 5.0;
         let builtin = !selected.id.starts_with("custom-");
         info.label(
-            RichText::new(if builtin {
-                "PRESET THEME"
-            } else {
-                "CUSTOM THEME"
-            })
+            RichText::new(format!(
+                "{}  ·  {}",
+                if builtin { "PRESET" } else { "CUSTOM" },
+                selected.mode.label().to_uppercase()
+            ))
             .monospace()
             .size(11.5)
             .color(LIME),
@@ -366,6 +395,8 @@ impl App {
             (selected.vscode, "VS Code"),
             (selected.nvim, "Neovim"),
             (selected.glaze, "GlazeWM"),
+            (selected.chrome, "Chrome"),
+            (selected.firefox, "Firefox"),
         ]
         .into_iter()
         .filter_map(|(on, name)| on.then_some(name))
@@ -393,7 +424,7 @@ impl App {
         let apply = if selected.vscode && selected.code_theme.trim().is_empty() {
             apply.on_hover_text(format!(
                 "VS Code uses {}. On first use WTE installs the bundled theme through VS Code.",
-                crate::exovoid::NAME
+                crate::exovoid::name(selected.mode)
             ))
         } else {
             apply
@@ -427,13 +458,20 @@ impl App {
                         Button::new(RichText::new(label).size(13.0).color(if active {
                             WHITE
                         } else {
-                            MUTED
+                            ui.visuals().weak_text_color()
                         }))
-                        .fill(if active { GREEN } else { PAPER })
+                        .fill(if active {
+                            GREEN
+                        } else {
+                            ui.visuals().panel_fill
+                        })
                         .stroke(if active {
                             Stroke::NONE
                         } else {
-                            Stroke::new(1.0_f32, LINE)
+                            Stroke::new(
+                                1.0_f32,
+                                ui.visuals().widgets.noninteractive.bg_stroke.color,
+                            )
                         })
                         .corner_radius(15),
                     );
@@ -455,7 +493,7 @@ impl App {
             .collect();
         if themes.is_empty() {
             Frame::new()
-                .fill(WHITE)
+                .fill(ui.visuals().window_fill)
                 .inner_margin(18)
                 .corner_radius(7)
                 .show(ui, |ui| {
@@ -473,7 +511,7 @@ impl App {
                 for t in row {
                     let (r, resp) = ui.allocate_exact_size(vec2(card_width, 159.0), Sense::click());
                     resp.widget_info(|| WidgetInfo::labeled(WidgetType::Button, true, &t.name));
-                    ui.painter().rect_filled(r, 7, WHITE);
+                    ui.painter().rect_filled(r, 7, ui.visuals().window_fill);
                     let pic = Rect::from_min_max(
                         r.min + vec2(1.0, 1.0),
                         pos2(r.right() - 1.0, r.bottom() - 50.0),
@@ -504,7 +542,7 @@ impl App {
                         Align2::LEFT_CENTER,
                         &t.name,
                         strong(17.0),
-                        INK,
+                        ui.visuals().text_color(),
                     );
                     for (i, c) in [t.palette.surface, t.palette.accent, t.palette.secondary]
                         .into_iter()
@@ -518,24 +556,24 @@ impl App {
                         Stroke::new(
                             if active { 2.0_f32 } else { 1.0_f32 },
                             if active {
-                                GREEN
+                                ui.visuals().hyperlink_color
                             } else if resp.hovered() {
-                                MUTED
+                                ui.visuals().weak_text_color()
                             } else {
-                                LINE
+                                ui.visuals().widgets.noninteractive.bg_stroke.color
                             },
                         ),
                         StrokeKind::Inside,
                     );
                     if active {
                         let badge = Rect::from_min_size(r.min + vec2(9.0, 9.0), vec2(65.0, 20.0));
-                        p.rect_filled(badge, 10, WHITE);
+                        p.rect_filled(badge, 10, ui.visuals().window_fill);
                         p.text(
                             badge.center(),
                             Align2::CENTER_CENTER,
                             "Selected",
                             strong(11.0),
-                            GREEN,
+                            ui.visuals().hyperlink_color,
                         );
                     }
                     if resp.on_hover_cursor(CursorIcon::PointingHand).clicked() {
@@ -556,13 +594,17 @@ impl App {
         match self.photos.get(ui.ctx(), t) {
             Ok(texture) => photo(ui.painter(), rect, &texture, radius),
             Err(error) => {
-                ui.painter().rect_filled(rect, radius, LINE);
+                ui.painter().rect_filled(
+                    rect,
+                    radius,
+                    ui.visuals().widgets.noninteractive.bg_stroke.color,
+                );
                 ui.painter().text(
                     rect.center(),
                     Align2::CENTER_CENTER,
                     "Wallpaper unavailable",
                     FontId::proportional(15.0),
-                    INK,
+                    ui.visuals().text_color(),
                 );
                 ui.interact(rect, ui.id().with((&t.id, "error")), Sense::hover())
                     .on_hover_text(error);
@@ -656,9 +698,17 @@ impl App {
             });
             let right=&mut cols[1];
             section(right,"Theme name",|ui|{
-                ui.add(TextEdit::singleline(&mut t.name).background_color(PAPER).margin(Margin::symmetric(7,5)).desired_width(f32::INFINITY).char_limit(64).hint_text("Theme name"));
+                ui.add(TextEdit::singleline(&mut t.name).background_color(ui.visuals().panel_fill).margin(Margin::symmetric(7,5)).desired_width(f32::INFINITY).char_limit(64).hint_text("Theme name"));
             });
             section(right,"Color palette",|ui|{
+                ui.horizontal(|ui| {
+                    ui.label("Theme mode");
+                    let mut mode = t.mode;
+                    for value in [Appearance::Light, Appearance::Dark] {
+                        ui.selectable_value(&mut mode, value, value.label());
+                    }
+                    t.set_mode(mode);
+                });
                 let p=&mut t.palette;
                 Grid::new("palette-editor").num_columns(2).spacing(vec2(16.0,7.0)).show(ui,|ui|{
                     for (i,(label,value)) in [("Background",&mut p.background),("Surface",&mut p.surface),("Text",&mut p.text),("Muted",&mut p.muted),("Accent",&mut p.accent),("Secondary",&mut p.secondary)].into_iter().enumerate() {
@@ -668,20 +718,27 @@ impl App {
                 });
                 if button(ui,"Use wallpaper colors",false).clicked() {
                     match self.photos.palette(&t.wallpaper) {
-                        Ok(palette)=>t.palette=palette,
+                        Ok(palette)=>t.use_wallpaper_colors(palette),
                         Err(detail)=>self.message=Some(("Could not detect wallpaper colors".into(),detail)),
                     }
                 }
             });
             section(right,"Components",|ui|{
-                ui.checkbox(&mut t.desktop,"Windows wallpaper and accent");
+                ui.checkbox(&mut t.desktop,"Windows wallpaper, accent and mode");
                 ui.checkbox(&mut t.vscode,"Visual Studio Code");
-                if t.vscode{ui.add(TextEdit::singleline(&mut t.code_theme).background_color(PAPER).margin(Margin::symmetric(7,5)).hint_text("ExoVoid, or installed VS Code theme").desired_width(f32::INFINITY)).on_hover_text("Leave blank to use ExoVoid syntax with your palette. WTE installs the bundled ExoVoid theme through VS Code on first use.");}
+                if t.vscode{ui.add(TextEdit::singleline(&mut t.code_theme).background_color(ui.visuals().panel_fill).margin(Margin::symmetric(7,5)).hint_text("ExoVoid, or installed VS Code theme").desired_width(f32::INFINITY)).on_hover_text("Leave blank to use ExoVoid syntax with your palette. WTE installs the bundled ExoVoid theme through VS Code on first use.");}
                 if t.vscode && t.code_theme.trim().is_empty() {
                     ui.label(muted("First use installs the bundled ExoVoid theme in VS Code if needed."));
                 }
                 ui.checkbox(&mut t.nvim,"Neovim");
-                if t.nvim{ui.add(TextEdit::singleline(&mut t.vim_scheme).background_color(PAPER).margin(Margin::symmetric(7,5)).hint_text("ExoVoid syntax, or installed colorscheme").desired_width(f32::INFINITY)).on_hover_text("Leave blank to use matching ExoVoid syntax with your palette.");}
+                if t.nvim{ui.add(TextEdit::singleline(&mut t.vim_scheme).background_color(ui.visuals().panel_fill).margin(Margin::symmetric(7,5)).hint_text("ExoVoid syntax, or installed colorscheme").desired_width(f32::INFINITY)).on_hover_text("Leave blank to use matching ExoVoid syntax with your palette.");}
+                ui.horizontal_wrapped(|ui| {
+                    ui.checkbox(&mut t.chrome, "Chrome");
+                    ui.checkbox(&mut t.firefox, "Firefox");
+                });
+                if t.chrome || t.firefox {
+                    ui.label(muted("Apply exports browser themes. Load them in each browser using the paths in Apply results."));
+                }
                 ui.checkbox(&mut t.glaze,"GlazeWM borders");
                 if t.glaze {
                     border_picker(ui,"Focused",t.palette.accent,&mut t.focused);
@@ -729,18 +786,28 @@ impl App {
             let close = Modal::new(Id::new("report")).show(ctx, |ui| {
                 ui.set_width(470.0);
                 ui.label(title(format!("Apply results · {name}"), 22.0));
-                for entry in &report.entries {
-                    ui.separator();
-                    ui.label(title(entry.component, 15.0));
-                    ui.colored_label(
-                        if entry.error {
-                            Color32::from_rgb(153, 49, 39)
-                        } else {
-                            MUTED
-                        },
-                        &entry.detail,
-                    );
-                }
+                ScrollArea::vertical()
+                    .max_height((ctx.content_rect().height() - 160.0).max(100.0))
+                    .show(ui, |ui| {
+                        for entry in &report.entries {
+                            ui.separator();
+                            ui.label(title(entry.component, 15.0));
+                            ui.colored_label(
+                                if entry.error {
+                                    ui.visuals().error_fg_color
+                                } else {
+                                    ui.visuals().weak_text_color()
+                                },
+                                &entry.detail,
+                            );
+                            if let Some(path) = &entry.path {
+                                ui.label(small(path.display().to_string()));
+                                if ui.small_button("Copy path").clicked() {
+                                    ui.ctx().copy_text(path.to_string_lossy().into_owned());
+                                }
+                            }
+                        }
+                    });
                 button(ui, "Done", true).clicked()
             });
             if close.inner || close.should_close() {
@@ -778,8 +845,8 @@ fn pick_wallpaper() -> Option<PathBuf> {
 
 fn section(ui: &mut Ui, name: &str, body: impl FnOnce(&mut Ui)) {
     Frame::new()
-        .fill(WHITE)
-        .stroke(Stroke::new(1.0_f32, LINE))
+        .fill(ui.visuals().window_fill)
+        .stroke(ui.visuals().widgets.noninteractive.bg_stroke)
         .corner_radius(7)
         .inner_margin(14)
         .show(ui, |ui| {
@@ -829,7 +896,7 @@ impl eframe::App for App {
     fn update(&mut self, ctx: &eframe::egui::Context, _frame: &mut eframe::Frame) {
         self.header(ctx);
         CentralPanel::default()
-            .frame(Frame::new().fill(PAPER))
+            .frame(Frame::new().fill(ctx.style().visuals.panel_fill))
             .show(ctx, |ui| {
                 ScrollArea::vertical().show(ui, |ui| {
                     Frame::new()

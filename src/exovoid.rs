@@ -1,9 +1,30 @@
 //! ExoVoid Classic Syntax – Dark Soft Blue. The bundled VSIX contains this exact JSON.
-use crate::theme::Rgb;
+use crate::theme::{Appearance, Rgb};
 use serde_json::Value;
 use std::sync::LazyLock;
 
 pub const NAME: &str = "ExoVoid Classic Syntax - Dark Soft Blue";
+pub const LIGHT_NAME: &str = "WTE ExoVoid Light";
+
+pub fn name(mode: Appearance) -> &'static str {
+    match mode {
+        Appearance::Dark => NAME,
+        Appearance::Light => LIGHT_NAME,
+    }
+}
+
+/// Keep the source hue and use a darker ink on light editor surfaces.
+pub fn ink(mode: Appearance, source: &str) -> Rgb {
+    let rgb = rgb(source);
+    if mode == Appearance::Dark {
+        return rgb;
+    }
+    let [r, g, b] = rgb;
+    let chroma = r.max(g).max(b) - r.min(g).min(b);
+    let shade = if chroma < 12 { 0.70 } else { 0.28 };
+    crate::palette::readable(crate::palette::mix(rgb, [0; 3], shade), [220; 3])
+}
+
 pub static SOURCE: LazyLock<Value> = LazyLock::new(|| {
     serde_json::from_str(include_str!(
         "../assets/exovoid/ExoVoidClassicSyntax_DarkSoftBlue.json"

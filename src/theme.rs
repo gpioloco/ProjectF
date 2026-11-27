@@ -2,6 +2,21 @@ use anyhow::{Result, ensure};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Appearance {
+    #[default]
+    Dark,
+    Light,
+}
+impl Appearance {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Dark => "Dark",
+            Self::Light => "Light",
+        }
+    }
+}
+
 pub type Rgb = [u8; 3];
 pub fn hex([r, g, b]: Rgb) -> String {
     format!("#{r:02X}{g:02X}{b:02X}")
@@ -80,11 +95,19 @@ pub struct Theme {
     pub name: String,
     pub wallpaper: Wallpaper,
     pub palette: Palette,
+    #[serde(default)]
+    pub mode: Appearance,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    alternate_palette: Option<Palette>,
     pub effects: Effects,
     pub desktop: bool,
     pub vscode: bool,
     pub nvim: bool,
     pub glaze: bool,
+    #[serde(default)]
+    pub chrome: bool,
+    #[serde(default)]
+    pub firefox: bool,
     pub code_theme: String,
     pub vim_scheme: String,
     pub focused: Option<Rgb>,
@@ -151,17 +174,40 @@ impl Theme {
             name,
             wallpaper,
             palette,
+            mode: Appearance::Dark,
+            alternate_palette: None,
             effects: Effects::default(),
             desktop: true,
             vscode: true,
             nvim: true,
             glaze: true,
+            chrome: false,
+            firefox: false,
             code_theme: String::new(),
             vim_scheme: String::new(),
             focused: None,
             unfocused: None,
         }
     }
+    pub fn set_mode(&mut self, mode: Appearance) {
+        if mode != self.mode {
+            let next = self
+                .alternate_palette
+                .take()
+                .unwrap_or_else(|| self.palette.variant(mode));
+            self.alternate_palette = Some(std::mem::replace(&mut self.palette, next));
+            self.mode = mode;
+        }
+    }
+
+    pub fn use_wallpaper_colors(&mut self, dark: Palette) {
+        let mode = self.mode;
+        self.palette = dark;
+        self.alternate_palette = None;
+        self.mode = Appearance::Dark;
+        self.set_mode(mode);
+    }
+
     pub fn validate(&self) -> Result<()> {
         ensure!(
             !self.name.trim().is_empty()
@@ -189,7 +235,7 @@ impl Theme {
             "Effect strength must be between 0 and 100."
         );
         ensure!(
-            self.desktop || self.vscode || self.nvim || self.glaze,
+            self.desktop || self.vscode || self.nvim || self.glaze || self.chrome || self.firefox,
             "Select at least one component."
         );
         Ok(())

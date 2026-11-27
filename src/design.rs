@@ -1,4 +1,4 @@
-use crate::theme::Rgb;
+use crate::theme::{Appearance, Rgb};
 use eframe::egui::*;
 
 pub const PAPER: Color32 = Color32::from_rgb(243, 244, 237);
@@ -15,19 +15,23 @@ pub fn strong(size: f32) -> FontId {
     FontId::new(size, FontFamily::Name("semibold".into()))
 }
 pub fn title(s: impl Into<String>, size: f32) -> RichText {
-    RichText::new(s).font(strong(size)).color(INK)
+    RichText::new(s).font(strong(size))
 }
 pub fn small(s: impl Into<String>) -> RichText {
-    RichText::new(s).monospace().size(11.5).color(MUTED)
+    RichText::new(s).monospace().size(11.5).weak()
 }
 pub fn muted(s: impl Into<String>) -> RichText {
-    RichText::new(s).color(MUTED).size(14.0)
+    RichText::new(s).weak().size(14.0)
 }
 pub fn button(ui: &mut Ui, label: &str, primary: bool) -> Response {
     let (bg, fg, outline) = if primary {
         (GREEN, Color32::WHITE, GREEN)
     } else {
-        (WHITE, INK, LINE)
+        (
+            ui.visuals().window_fill,
+            ui.visuals().text_color(),
+            ui.visuals().widgets.noninteractive.bg_stroke.color,
+        )
     };
     ui.add(
         Button::new(RichText::new(label).font(strong(14.0)).color(fg))
@@ -38,7 +42,7 @@ pub fn button(ui: &mut Ui, label: &str, primary: bool) -> Response {
     )
 }
 
-pub fn setup(ctx: &Context) {
+pub fn setup(ctx: &Context, mode: Appearance) {
     let mut fonts = FontDefinitions::default();
     fonts.font_data.insert(
         "dm".into(),
@@ -59,18 +63,38 @@ pub fn setup(ctx: &Context) {
         .families
         .insert(FontFamily::Name("semibold".into()), bold);
     ctx.set_fonts(fonts);
+    appearance(ctx, mode);
+}
+
+pub fn appearance(ctx: &Context, mode: Appearance) {
+    let dark = mode == Appearance::Dark;
+    ctx.set_theme(if dark { Theme::Dark } else { Theme::Light });
+    ctx.send_viewport_cmd(ViewportCommand::SetTheme(if dark {
+        SystemTheme::Dark
+    } else {
+        SystemTheme::Light
+    }));
     let mut style = (*ctx.style()).clone();
-    style.visuals = Visuals::light();
-    style.visuals.panel_fill = PAPER;
-    style.visuals.window_fill = WHITE;
-    style.visuals.extreme_bg_color = WHITE;
-    style.visuals.override_text_color = Some(INK);
-    style.visuals.selection.bg_fill = GREEN;
-    style.visuals.selection.stroke = Stroke::new(1.0_f32, WHITE);
-    style.visuals.widgets.noninteractive.bg_stroke = Stroke::new(1.0_f32, LINE);
-    style.visuals.widgets.inactive.bg_fill = Color32::from_rgb(222, 230, 218);
-    style.visuals.widgets.hovered.bg_fill = Color32::from_rgb(209, 224, 202);
-    style.visuals.widgets.active.bg_fill = LIME;
+    let v = &mut style.visuals;
+    *v = if dark {
+        Visuals::dark()
+    } else {
+        Visuals::light()
+    };
+    let tone = |day, night| if dark { color(night) } else { day };
+    v.panel_fill = tone(PAPER, [23, 30, 26]);
+    v.window_fill = tone(WHITE, [35, 45, 38]);
+    v.extreme_bg_color = v.panel_fill;
+    v.override_text_color = Some(tone(INK, [231, 238, 229]));
+    v.weak_text_color = Some(tone(MUTED, [173, 191, 177]));
+    v.hyperlink_color = tone(GREEN, [180, 214, 163]);
+    v.error_fg_color = tone(Color32::from_rgb(153, 49, 39), [255, 159, 147]);
+    v.selection.bg_fill = GREEN;
+    v.selection.stroke = Stroke::new(1.0_f32, WHITE);
+    v.widgets.noninteractive.bg_stroke = Stroke::new(1.0_f32, tone(LINE, [71, 86, 74]));
+    v.widgets.inactive.bg_fill = tone(Color32::from_rgb(222, 230, 218), [54, 68, 58]);
+    v.widgets.hovered.bg_fill = tone(Color32::from_rgb(209, 224, 202), [70, 89, 75]);
+    v.widgets.active.bg_fill = tone(LIME, [69, 95, 66]);
     style.spacing.item_spacing = vec2(9.0, 7.0);
     style.spacing.button_padding = vec2(13.0, 6.0);
     style
@@ -134,6 +158,7 @@ pub fn swatches(p: &Painter, rect: Rect, colors: [Rgb; 6]) {
 
 pub fn editor_sample(p: &Painter, rect: Rect, t: &crate::theme::Theme) {
     let q = &t.palette;
+    let ink = |source| color(crate::exovoid::ink(t.mode, source));
     let r = Rect::from_center_size(rect.center(), vec2((rect.width() - 48.0).min(355.0), 139.0));
     p.rect_filled(
         r.translate(vec2(0.0, 5.0)),
@@ -159,9 +184,7 @@ pub fn editor_sample(p: &Painter, rect: Rect, t: &crate::theme::Theme) {
         Align2::LEFT_CENTER,
         "palette.rs",
         FontId::monospace(11.0),
-        color(crate::exovoid::rgb(crate::exovoid::workbench(
-            "tab.activeForeground",
-        ))),
+        ink(crate::exovoid::workbench("tab.activeForeground")),
     );
     let plain = crate::exovoid::workbench("editor.foreground");
     let function = crate::exovoid::syntax("entity.name.function");
@@ -189,16 +212,14 @@ pub fn editor_sample(p: &Painter, rect: Rect, t: &crate::theme::Theme) {
             Align2::LEFT_CENTER,
             (i + 1).to_string(),
             FontId::monospace(11.0),
-            color(crate::exovoid::rgb(crate::exovoid::workbench(
-                "editorLineNumber.foreground",
-            ))),
+            ink(crate::exovoid::workbench("editorLineNumber.foreground")),
         );
         let mut job = epaint::text::LayoutJob::default();
         for &(token, hex) in *spans {
             job.append(
                 token,
                 0.0,
-                TextFormat::simple(FontId::monospace(13.0), color(crate::exovoid::rgb(hex))),
+                TextFormat::simple(FontId::monospace(13.0), ink(hex)),
             );
         }
         let line = p.layout_job(job);

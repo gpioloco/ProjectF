@@ -1,4 +1,4 @@
-use crate::theme::Theme;
+use crate::{browser::Browser, theme::Theme};
 #[cfg(any(windows, test))]
 use crate::{
     config,
@@ -9,9 +9,7 @@ use crate::{store::stored_asset, wallpaper};
 use anyhow::Result;
 #[cfg(any(windows, test))]
 use anyhow::{Context, ensure};
-use std::path::Path;
-#[cfg(windows)]
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 /// Preserve the original bytes before replacing either application's existing settings.
 #[cfg(any(windows, test))]
@@ -61,16 +59,20 @@ fn install_nvim(package: &Path, t: &Theme) -> Result<()> {
 }
 
 #[cfg(any(windows, test))]
-fn exovoid_registered(extensions: &Path) -> Result<bool> {
+fn exovoid_registered(extensions: &Path, mode: crate::theme::Appearance) -> Result<bool> {
     let Some(index) = read_optional(&extensions.join("extensions.json"))? else {
         return Ok(false);
     };
     let entries: Vec<serde_json::Value> =
         serde_json::from_slice(&index).context("Read VS Code’s extension list")?;
+    let id = match mode {
+        crate::theme::Appearance::Dark => "ginopioloco.exovoid",
+        crate::theme::Appearance::Light => "wte-local.exovoid-light",
+    };
     for entry in entries {
         if !entry["identifier"]["id"]
             .as_str()
-            .is_some_and(|id| id.eq_ignore_ascii_case("ginopioloco.exovoid"))
+            .is_some_and(|installed| installed.eq_ignore_ascii_case(id))
         {
             continue;
         }
@@ -88,7 +90,7 @@ fn exovoid_registered(extensions: &Path) -> Result<bool> {
                 .is_some_and(|themes| {
                     themes
                         .iter()
-                        .any(|theme| theme["label"] == crate::exovoid::NAME)
+                        .any(|theme| theme["label"] == crate::exovoid::name(mode))
                 })
             {
                 return Ok(true);
@@ -103,13 +105,14 @@ pub struct Entry {
     pub component: &'static str,
     pub detail: String,
     pub error: bool,
+    pub path: Option<PathBuf>,
 }
 #[derive(Default, Clone)]
 pub struct Report {
     pub entries: Vec<Entry>,
 }
-#[cfg(windows)]
 impl Report {
+    #[cfg(windows)]
     fn record(&mut self, component: &'static str, result: Result<String>) {
         let (detail, error) = match result {
             Ok(s) => (s, false),
@@ -119,6 +122,19 @@ impl Report {
             component,
             detail,
             error,
+            path: None,
+        });
+    }
+    fn browser(&mut self, browser: Browser, root: &Path, theme: &Theme) {
+        let (detail, path) = match browser.export(root, theme) {
+            Ok(path) => (browser.instructions().into(), Some(path)),
+            Err(error) => (format!("{error:#}"), None),
+        };
+        self.entries.push(Entry {
+            component: browser.name(),
+            detail,
+            error: path.is_none(),
+            path,
         });
     }
 }
@@ -178,21 +194,34 @@ mod platform {
                 return Err(e).context("Open the theme in Windows Personalization");
             }
         }
-        Ok("Sent wallpaper and accent to Windows Personalization.".into())
+        Ok("Sent the wallpaper, accent and appearance mode to Windows Personalization.".into())
     }
 
-    fn ensure_exovoid(root: &Path, base: &directories::BaseDirs) -> Result<bool> {
+    fn ensure_exovoid(
+        root: &Path,
+        base: &directories::BaseDirs,
+        mode: crate::theme::Appearance,
+    ) -> Result<bool> {
         let extensions = base.home_dir().join(".vscode/extensions");
-        if exovoid_registered(&extensions)? {
+        if exovoid_registered(&extensions, mode)? {
             return Ok(false);
         }
 
-        const PACKAGE: &str = "exovoid-1.4.0.vsix";
-        const BYTES: &[u8] = include_bytes!("../assets/exovoid/exovoid-1.4.0.vsix");
+        let light;
+        let (package, bytes): (&str, &[u8]) = match mode {
+            crate::theme::Appearance::Dark => (
+                "exovoid-1.4.0.vsix",
+                include_bytes!("../assets/exovoid/exovoid-1.4.0.vsix"),
+            ),
+            crate::theme::Appearance::Light => {
+                light = config::light_vsix()?;
+                ("wte-exovoid-light-1.0.0.vsix", &light)
+            }
+        };
         let folder = root.join("extensions");
-        let archive = folder.join(PACKAGE);
-        if read_optional(&archive)?.as_deref() != Some(BYTES) {
-            atomic_write(&archive, BYTES)?;
+        let archive = folder.join(package);
+        if read_optional(&archive)?.as_deref() != Some(bytes) {
+            atomic_write(&archive, bytes)?;
         }
         let help = format!(
             "In VS Code, use ‘Extensions: Install from VSIX…’ with {} and apply the theme again.",
@@ -212,7 +241,7 @@ mod platform {
         // Both arguments are fixed. Let VS Code validate the local package and enforce its policies.
         let result = Command::new(cli)
             .current_dir(folder)
-            .args(["--install-extension", PACKAGE])
+            .args(["--install-extension", package])
             .creation_flags(0x08000000)
             .stdin(Stdio::null())
             .output()
@@ -240,7 +269,7 @@ mod platform {
             |s| {
                 let settings = config::vscode(s, t)?;
                 if t.code_theme.trim().is_empty() {
-                    installed = ensure_exovoid(root, &base)?;
+                    installed = ensure_exovoid(root, &base, t.mode)?;
                 }
                 Ok(settings)
             },
@@ -320,9 +349,7 @@ mod platform {
 }
 
 #[cfg(windows)]
-pub fn run(root: &Path, t: &Theme) -> Result<Report> {
-    t.validate()?;
-    let mut report = Report::default();
+fn desktop_components(report: &mut Report, root: &Path, t: &Theme) {
     // Files from the same apply share a backup directory. Create it only on the first actual edit.
     let backups = root.join("backups").join(crate::unique_id());
     if t.desktop {
@@ -343,14 +370,29 @@ pub fn run(root: &Path, t: &Theme) -> Result<Report> {
             Ok(format!("Backups saved in {}", backups.display())),
         );
     }
-    Ok(report)
 }
 
-#[cfg(not(windows))]
-pub fn run(_root: &Path, _t: &Theme) -> Result<Report> {
-    anyhow::bail!(
-        "Desktop integration requires Windows. Theme editing and preview are available here."
-    )
+pub fn run(root: &Path, t: &Theme) -> Result<Report> {
+    t.validate()?;
+    let mut report = Report::default();
+    #[cfg(windows)]
+    desktop_components(&mut report, root, t);
+    #[cfg(not(windows))]
+    if t.desktop || t.vscode || t.nvim || t.glaze {
+        report.entries.push(Entry {
+            component: "Desktop integrations",
+            detail: "These components require Windows.".into(),
+            error: true,
+            path: None,
+        });
+    }
+    if t.chrome {
+        report.browser(Browser::Chrome, root, t);
+    }
+    if t.firefox {
+        report.browser(Browser::Firefox, root, t);
+    }
+    Ok(report)
 }
 
 #[cfg(test)]
@@ -423,9 +465,80 @@ mod tests {
     }
 
     #[test]
+    fn light_editors_use_the_same_ink_and_switch_back_to_the_dark_base() -> Result<()> {
+        use crate::{
+            exovoid,
+            theme::{Appearance, hex},
+        };
+        use std::io::Cursor;
+        let mut t = Theme::preset(Photo::BlueHour);
+        t.set_mode(Appearance::Light);
+        let mut vsix = zip::ZipArchive::new(Cursor::new(config::light_vsix()?))?;
+        let package: serde_json::Value =
+            serde_json::from_reader(vsix.by_name("extension/package.json")?)?;
+        assert_eq!(package["contributes"]["themes"][0]["uiTheme"], "vs");
+        let base: serde_json::Value =
+            serde_json::from_reader(vsix.by_name("extension/theme.json")?)?;
+        assert_eq!(base["name"], exovoid::LIGHT_NAME);
+        let light = config::vscode("{}", &t)?;
+        let settings: serde_json::Value = serde_json::from_str(&light)?;
+        let scope = format!("[{}]", exovoid::LIGHT_NAME);
+        assert_eq!(settings["workbench.colorTheme"], exovoid::LIGHT_NAME);
+        assert_eq!(
+            settings["workbench.colorCustomizations"][&scope]["editor.background"],
+            hex(t.palette.background)
+        );
+        let vim = config::nvim_palette(&t);
+        assert!(vim.contains("set background=light"));
+        for (rule, original) in base["tokenColors"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .zip(exovoid::SOURCE["tokenColors"].as_array().unwrap())
+        {
+            assert_eq!(rule["scope"], original["scope"]);
+            assert_eq!(
+                rule["settings"]["fontStyle"],
+                original["settings"]["fontStyle"]
+            );
+            if let Some(fg) = original["settings"]["foreground"].as_str() {
+                assert_eq!(
+                    rule["settings"]["foreground"],
+                    hex(exovoid::ink(t.mode, fg))
+                );
+            }
+        }
+        let fg = base["semanticTokenColors"]["numberLiteral"]
+            .as_str()
+            .unwrap();
+        assert!(vim.contains(&format!("@lsp.type.numberLiteral guifg={fg} ")));
+        let ini: String = String::from_utf16(
+            &config::desktop_theme(&t, "local.jpg")?[2..]
+                .as_chunks::<2>()
+                .0
+                .iter()
+                .copied()
+                .map(u16::from_le_bytes)
+                .collect::<Vec<_>>(),
+        )?;
+        assert!(ini.contains("SystemMode=Light\r\nAppMode=Light\r\n"));
+        t.set_mode(Appearance::Dark);
+        let dark: serde_json::Value = serde_json::from_str(&config::vscode(&light, &t)?)?;
+        assert_eq!(dark["workbench.colorTheme"], exovoid::NAME);
+        assert_eq!(
+            dark["workbench.colorCustomizations"][&scope],
+            settings["workbench.colorCustomizations"][&scope]
+        );
+        Ok(())
+    }
+
+    #[test]
     fn recognizes_installed_exovoid_only_when_it_contributes_the_requested_theme() -> Result<()> {
         let dir = tempfile::tempdir()?;
-        assert!(!exovoid_registered(dir.path())?);
+        assert!(!exovoid_registered(
+            dir.path(),
+            crate::theme::Appearance::Dark
+        )?);
         let extension = dir.path().join("ginopioloco.exovoid-1.4.0");
         fs::create_dir(&extension)?;
         fs::write(
@@ -437,14 +550,20 @@ mod tests {
             &manifest,
             r#"{"contributes":{"themes":[{"label":"ExoVoid"}]}}"#,
         )?;
-        assert!(!exovoid_registered(dir.path())?);
+        assert!(!exovoid_registered(
+            dir.path(),
+            crate::theme::Appearance::Dark
+        )?);
         fs::write(
             manifest,
             serde_json::to_vec(
                 &serde_json::json!({"contributes":{"themes":[{"label":crate::exovoid::NAME}]}}),
             )?,
         )?;
-        assert!(exovoid_registered(dir.path())?);
+        assert!(exovoid_registered(
+            dir.path(),
+            crate::theme::Appearance::Dark
+        )?);
         Ok(())
     }
 

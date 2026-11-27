@@ -1,5 +1,6 @@
 #![cfg_attr(target_os = "windows", windows_subsystem = "windows")]
 mod apply;
+mod browser;
 #[cfg_attr(not(any(windows, test)), allow(dead_code))]
 mod config;
 mod design;
@@ -9,6 +10,18 @@ mod store;
 mod theme;
 mod ui;
 mod wallpaper;
+
+fn archive(files: &[(&str, &[u8])]) -> anyhow::Result<Vec<u8>> {
+    use std::io::{Cursor, Write};
+    use zip::{ZipWriter, write::SimpleFileOptions};
+    let mut zip = ZipWriter::new(Cursor::new(Vec::new()));
+    let options = SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
+    for &(name, data) in files {
+        zip.start_file(name, options)?;
+        zip.write_all(data)?;
+    }
+    Ok(zip.finish()?.into_inner())
+}
 
 fn unique_id() -> String {
     let time = std::time::SystemTime::now()
@@ -33,9 +46,9 @@ fn main() -> eframe::Result {
         "WTE · Windows Theme Engine",
         options,
         Box::new(|cc| {
-            design::setup(&cc.egui_ctx);
             let store = store::Store::open()?;
             let library = store.load()?;
+            design::setup(&cc.egui_ctx, library.app_mode);
             Ok(Box::new(ui::App::new(store, library)))
         }),
     );

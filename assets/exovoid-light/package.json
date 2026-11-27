@@ -1,0 +1,15 @@
+{
+  "name": "exovoid-light",
+  "displayName": "WTE ExoVoid Light",
+  "publisher": "wte-local",
+  "version": "1.0.0",
+  "description": "A light adaptation of ExoVoid Classic Syntax for Windows Theme Engine.",
+  "engines": { "vscode": "^1.98.0" },
+  "license": "MIT",
+  "categories": ["Themes"],
+  "contributes": {
+    "themes": [
+      { "label": "WTE ExoVoid Light", "uiTheme": "vs", "path": "./theme.json" }
+    ]
+  }
+}

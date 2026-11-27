@@ -59,8 +59,9 @@ pub fn vscode(input: &str, t: &Theme) -> Result<String> {
         .object_value_or_create()
         .context("VS Code settings must be a JSON object")?;
     if t.code_theme.trim().is_empty() {
-        set(&obj, "workbench.colorTheme", exovoid::NAME)?;
-        let scope = format!("[{}]", exovoid::NAME);
+        let name = exovoid::name(t.mode);
+        set(&obj, "workbench.colorTheme", name)?;
+        let scope = format!("[{name}]");
         let workbench = object(&object(&obj, "workbench.colorCustomizations")?, &scope)?;
         for (key, value) in exovoid::SOURCE["colors"].as_object().unwrap() {
             if let Some(color) = workbench_override(key, value.as_str().unwrap(), &t.palette) {
@@ -203,43 +204,30 @@ pub fn nvim_palette(t: &Theme) -> String {
     let surface = hex(p.surface);
     let accent = hex(p.accent);
     let selection = hex(mix(p.surface, p.accent, 0.35));
-    let fg = exovoid::workbench("editor.foreground");
+    let ink = |value| hex(exovoid::ink(t.mode, value));
+    let fg = ink(exovoid::workbench("editor.foreground"));
+    let line = ink(exovoid::workbench("editorLineNumber.foreground"));
+    let active_line = ink(exovoid::workbench("editorLineNumber.activeForeground"));
     let mut out = format!(
         "\" Windows Theme Engine\nset termguicolors\nset background={}\nhighlight clear\nif exists('syntax_on') | syntax reset | endif\nlet g:colors_name = 'wte-palette'\n",
-        if (p.background[0] as u32 * 299
-            + p.background[1] as u32 * 587
-            + p.background[2] as u32 * 114)
-            > 145000
-        {
-            "light"
-        } else {
-            "dark"
-        }
+        t.mode.label().to_ascii_lowercase()
     );
     for (groups, fore, back) in [
-        ("Normal NormalNC EndOfBuffer", fg, bg.as_str()),
+        ("Normal NormalNC EndOfBuffer", fg.as_str(), bg.as_str()),
         (
             "NormalFloat Pmenu StatusLineNC StatusLine",
-            fg,
+            fg.as_str(),
             surface.as_str(),
         ),
-        (
-            "LineNr",
-            exovoid::workbench("editorLineNumber.foreground"),
-            bg.as_str(),
-        ),
-        (
-            "CursorLineNr",
-            exovoid::workbench("editorLineNumber.activeForeground"),
-            surface.as_str(),
-        ),
+        ("LineNr", line.as_str(), bg.as_str()),
+        ("CursorLineNr", active_line.as_str(), surface.as_str()),
         (
             "FloatBorder WinSeparator",
             accent.as_str(),
             surface.as_str(),
         ),
         ("Cursor", bg.as_str(), accent.as_str()),
-        ("PmenuSel Search", fg, selection.as_str()),
+        ("PmenuSel Search", fg.as_str(), selection.as_str()),
         ("Visual", "NONE", selection.as_str()),
         ("ColorColumn CursorLine", "NONE", surface.as_str()),
     ] {
@@ -288,13 +276,13 @@ pub fn nvim_palette(t: &Theme) -> String {
         ("@tag.attribute", "entity.other.attribute-name"),
         ("@string.regexp", "string.regexp"),
     ] {
-        let fore = exovoid::syntax(scope);
+        let fore = ink(exovoid::syntax(scope));
         for group in groups.split_whitespace() {
             out += &format!("highlight {group} guifg={fore} guibg=NONE gui=NONE\n");
         }
     }
     for (token, value) in exovoid::SOURCE["semanticTokenColors"].as_object().unwrap() {
-        let fore = value.as_str().expect("bundled semantic token color");
+        let fore = ink(value.as_str().expect("bundled semantic token color"));
         out += &format!("highlight @lsp.type.{token} guifg={fore} guibg=NONE gui=NONE\n");
     }
     out
@@ -307,14 +295,64 @@ pub fn desktop_theme(t: &Theme, wallpaper: &str) -> Result<Vec<u8>> {
     );
     let color = hex(t.palette.accent);
     let content = format!(
-        "[Theme]\r\nDisplayName=WTE {}\r\n\r\n[Control Panel\\Desktop]\r\nWallpaper={}\r\nTileWallpaper=0\r\nWallpaperStyle=10\r\n\r\n[VisualStyles]\r\nPath=%SystemRoot%\\resources\\Themes\\Aero\\Aero.msstyles\r\nColorStyle=NormalColor\r\nSize=NormalSize\r\nAutoColorization=0\r\nColorizationColor=0xFF{}\r\n\r\n[MasterThemeSelector]\r\nMTSM=DABJDKT\r\n",
+        "[Theme]\r\nDisplayName=WTE {}\r\n\r\n[Control Panel\\Desktop]\r\nWallpaper={}\r\nTileWallpaper=0\r\nWallpaperStyle=10\r\n\r\n[VisualStyles]\r\nPath=%SystemRoot%\\resources\\Themes\\Aero\\Aero.msstyles\r\nColorStyle=NormalColor\r\nSize=NormalSize\r\nSystemMode={mode}\r\nAppMode={mode}\r\nAutoColorization=0\r\nColorizationColor=0xFF{}\r\n\r\n[MasterThemeSelector]\r\nMTSM=DABJDKT\r\n",
         t.name,
         wallpaper,
-        &color[1..]
+        &color[1..],
+        mode = t.mode.label(),
     );
     Ok([0xfeffu16]
         .into_iter()
         .chain(content.encode_utf16())
         .flat_map(u16::to_le_bytes)
         .collect())
+}
+
+/// A separate declarative light base gives VS Code light native widgets and keeps
+/// customizations for the original dark theme in their own settings scope.
+pub fn light_vsix() -> Result<Vec<u8>> {
+    use crate::theme::{Appearance, Photo};
+    let mut base = Theme::preset(Photo::Canopy);
+    base.set_mode(Appearance::Light);
+    let mut theme = exovoid::SOURCE.clone();
+    theme["name"] = exovoid::LIGHT_NAME.into();
+    theme["type"] = "light".into();
+    let ink = |value: &str| hex(exovoid::ink(Appearance::Light, value));
+    for (key, value) in theme["colors"].as_object_mut().unwrap() {
+        let source = value.as_str().unwrap();
+        *value = workbench_override(key, source, &base.palette)
+            .unwrap_or_else(|| format!("{}{}", ink(source), &source[7..]))
+            .into();
+    }
+    for rule in theme["tokenColors"].as_array_mut().unwrap() {
+        if let Some(value) = rule["settings"]["foreground"].as_str() {
+            rule["settings"]["foreground"] = ink(value).into();
+        }
+    }
+    for value in theme["semanticTokenColors"]
+        .as_object_mut()
+        .unwrap()
+        .values_mut()
+    {
+        *value = ink(value.as_str().unwrap()).into();
+    }
+    crate::archive(&[
+        (
+            "[Content_Types].xml",
+            include_bytes!("../assets/exovoid-light/[Content_Types].xml"),
+        ),
+        (
+            "extension.vsixmanifest",
+            include_bytes!("../assets/exovoid-light/extension.vsixmanifest"),
+        ),
+        (
+            "extension/package.json",
+            include_bytes!("../assets/exovoid-light/package.json"),
+        ),
+        (
+            "extension/LICENSE.txt",
+            include_bytes!("../assets/exovoid/LICENSE"),
+        ),
+        ("extension/theme.json", &serde_json::to_vec(&theme)?),
+    ])
 }

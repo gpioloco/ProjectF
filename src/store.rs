@@ -1,4 +1,4 @@
-use crate::theme::Theme;
+use crate::theme::{Appearance, Theme};
 use anyhow::{Context, Result, ensure};
 use serde::{Deserialize, Serialize};
 use std::{
@@ -9,9 +9,23 @@ use std::{
 };
 use tempfile::NamedTempFile;
 
-#[derive(Default, Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct Library {
     pub themes: Vec<Theme>,
+    #[serde(default = "default_app_mode")]
+    pub app_mode: Appearance,
+}
+
+fn default_app_mode() -> Appearance {
+    Appearance::Light
+}
+impl Default for Library {
+    fn default() -> Self {
+        Self {
+            themes: Vec::new(),
+            app_mode: default_app_mode(),
+        }
+    }
 }
 
 pub struct Store {
@@ -145,4 +159,52 @@ pub fn stored_asset(root: &Path, folder: &str, extension: &str, data: &[u8]) -> 
         atomic_write(&path, data)?;
     }
     Ok(path)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::theme::Photo;
+
+    #[test]
+    fn legacy_library_and_independent_appearance_preferences_round_trip() -> Result<()> {
+        let mut original = Theme::preset(Photo::Sienna);
+        original.id = "custom-legacy".into();
+        let mut legacy = serde_json::to_value(&original)?;
+        for key in ["mode", "alternate_palette", "chrome", "firefox"] {
+            legacy.as_object_mut().unwrap().remove(key);
+        }
+        let dir = tempfile::tempdir()?;
+        let store = Store {
+            root: dir.path().into(),
+            _lock: fs::File::create(dir.path().join("lock"))?,
+        };
+        atomic_write(
+            &dir.path().join("library.json"),
+            &serde_json::to_vec(&serde_json::json!({"themes":[legacy]}))?,
+        )?;
+        let mut library = store.load()?;
+        assert_eq!(library.app_mode, Appearance::Light);
+        assert_eq!(library.themes[0], original);
+        library.app_mode = Appearance::Dark;
+        let theme = &mut library.themes[0];
+        theme.set_mode(Appearance::Light);
+        theme.palette.accent = [40, 80, 100];
+        let custom_light = theme.palette.clone();
+        store.save(&library)?;
+        let mut loaded = store.load()?;
+        assert_eq!(loaded.app_mode, Appearance::Dark);
+        let saved = &mut loaded.themes[0];
+        assert_eq!(saved.mode, Appearance::Light);
+        saved.set_mode(Appearance::Dark);
+        assert_eq!(saved.palette, original.palette);
+        saved.set_mode(Appearance::Light);
+        assert_eq!(saved.palette, custom_light);
+        let replacement = Theme::preset(Photo::BlueHour).palette;
+        saved.use_wallpaper_colors(replacement.clone());
+        assert_eq!(saved.palette, replacement.variant(Appearance::Light));
+        saved.set_mode(Appearance::Dark);
+        assert_eq!(saved.palette, replacement);
+        Ok(())
+    }
 }

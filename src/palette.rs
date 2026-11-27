@@ -1,5 +1,5 @@
 //! Generate a dark editor palette from representative colors in a wallpaper.
-use crate::theme::{Palette, Rgb};
+use crate::theme::{Appearance, Palette, Rgb};
 use image::{DynamicImage, GenericImageView};
 
 const HUES: usize = 24;
@@ -67,13 +67,38 @@ fn luminance(rgb: Rgb) -> f32 {
     0.2126 * r + 0.7152 * g + 0.0722 * b
 }
 
-// Keep an already-readable observed color. Lift dark samples just enough for syntax and borders.
-fn readable(rgb: Rgb, surface: Rgb) -> Rgb {
-    let minimum = 4.5 * (luminance(surface) + 0.05) - 0.05;
+pub fn readable(rgb: Rgb, surface: Rgb) -> Rgb {
+    let bg = luminance(surface) + 0.05;
+    let end = if bg * bg > 0.05 * 1.05 {
+        [0; 3]
+    } else {
+        [255; 3]
+    };
     (0..=32)
-        .map(|step| mix(rgb, [255; 3], step as f32 / 32.0))
-        .find(|candidate| luminance(*candidate) >= minimum)
-        .unwrap_or([255; 3])
+        .map(|step| mix(rgb, end, step as f32 / 32.0))
+        .find(|candidate| {
+            let fg = luminance(*candidate) + 0.05;
+            fg.max(bg) / fg.min(bg) >= 4.5
+        })
+        .unwrap_or(end)
+}
+
+impl Palette {
+    pub fn variant(&self, mode: Appearance) -> Self {
+        let (base, raised, ink, quiet) = match mode {
+            Appearance::Light => (253, 236, 28, 83),
+            Appearance::Dark => (16, 36, 246, 167),
+        };
+        let surface = mix([raised; 3], self.accent, 0.13);
+        Self {
+            background: mix([base; 3], self.accent, 0.06),
+            surface,
+            text: readable(mix([ink; 3], self.accent, 0.12), surface),
+            muted: readable(mix([quiet; 3], self.accent, 0.20), surface),
+            accent: readable(self.accent, surface),
+            secondary: readable(self.secondary, surface),
+        }
+    }
 }
 
 pub fn extract(image: &DynamicImage) -> Option<Palette> {
