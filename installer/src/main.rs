@@ -91,14 +91,14 @@ fn main() -> Result<()> {
     let dist = target_dir.join("dist");
     fs::create_dir_all(&dist)?;
     let setup = dist.join(format!("WTE-{version}-windows-x64-setup.exe"));
-    let exe = target_dir.join(target).join("release/wte.exe");
+    let exe = target_dir.join(target).join("release").join("wte.exe");
     let result = Command::new(compiler)
         .current_dir(root)
         .arg(define("VERSION", version.as_ref()))
         .arg(define("WTE_EXE", exe.as_os_str()))
         .arg(define("SOURCE", root.as_os_str()))
         .arg(define("OUTPUT", setup.as_os_str()))
-        .arg(root.join("installer/wte.nsi"))
+        .arg(root.join("installer").join("wte.nsi"))
         .status()?;
     ensure!(result.success(), "Installer compilation failed");
     println!("Built {}", setup.display());
