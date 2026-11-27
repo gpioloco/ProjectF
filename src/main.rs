@@ -41,7 +41,7 @@ fn main() -> eframe::Result {
     let options = eframe::NativeOptions {
         viewport: eframe::egui::ViewportBuilder::default()
             .with_inner_size([1120.0, 737.0])
-            .with_min_inner_size([775.0, 540.0])
+            .with_min_inner_size([480.0, 360.0])
             .with_icon(
                 eframe::icon_data::from_png_bytes(include_bytes!("../assets/icon.png"))
                     .expect("embedded icon"),
@@ -54,7 +54,7 @@ fn main() -> eframe::Result {
         Box::new(|cc| {
             let store = store::Store::open()?;
             let library = store.load()?;
-            design::setup(&cc.egui_ctx, library.app_mode);
+            design::setup(&cc.egui_ctx);
             let picker = rfd::FileDialog::new()
                 .set_parent(cc)
                 .set_title("Choose a wallpaper")

@@ -1,0 +1,2 @@
+[alias]
+installer = "run --locked --release -p wte-installer --"

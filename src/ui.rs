@@ -121,7 +121,7 @@ pub struct App {
     pending_photo: Option<(PickFor, Receiver<PickResult>)>,
     store: Store,
     library: Library,
-    selected: String,
+    styled: Option<(Appearance, Palette)>,
     page: Page,
     filter: Filter,
     photos: Photos,
@@ -141,7 +141,7 @@ impl App {
             confirm_restore: false,
             store,
             library,
-            selected: "canopy".into(),
+            styled: None,
             page: Page::Library,
             filter: Filter::All,
             photos: Photos::default(),
@@ -161,9 +161,17 @@ impl App {
             .collect()
     }
     fn current(&self) -> Theme {
-        self.themes()
-            .into_iter()
-            .find(|t| t.id == self.selected)
+        self.library
+            .themes
+            .iter()
+            .find(|t| t.id == self.library.selected)
+            .cloned()
+            .or_else(|| {
+                Photo::ALL
+                    .into_iter()
+                    .map(Theme::preset)
+                    .find(|t| t.id == self.library.selected)
+            })
             .unwrap_or_else(|| Theme::preset(Photo::Canopy))
     }
     fn start_edit(&mut self, new: bool) {
@@ -282,9 +290,9 @@ impl App {
         } else {
             library.themes.push(t.clone());
         }
+        library.selected = t.id;
         self.store.save(&library)?;
         self.library = library;
-        self.selected = t.id;
         self.draft = None;
         self.page = Page::Library;
         self.filter = Filter::All;
@@ -308,130 +316,152 @@ impl App {
             ctx.request_repaint();
         });
     }
-    fn header(&mut self, ctx: &eframe::egui::Context) {
+    fn header(&mut self, ctx: &eframe::egui::Context, p: &Palette, margin: i8) {
         let style = ctx.style();
         TopBottomPanel::top("masthead")
             .frame(
                 Frame::new()
                     .fill(style.visuals.window_fill)
                     .stroke(style.visuals.widgets.noninteractive.bg_stroke)
-                    .inner_margin(Margin::symmetric(30, 0)),
+                    .inner_margin(Margin::symmetric(margin, 10)),
             )
             .show(ctx, |ui| {
-                ui.set_height(68.0);
-                ui.horizontal_centered(|ui| {
-                    let (mark, _) = ui.allocate_exact_size(vec2(36.0, 36.0), Sense::hover());
-                    logo(ui.painter(), mark);
-                    ui.label(title("WTE", 28.0));
-                    ui.add_space(2.0);
-                    if ui.available_width() > 780.0 {
+                let narrow = ui.available_width() < 630.0;
+                ui.horizontal(|ui| {
+                    let (mark, _) = ui
+                        .allocate_exact_size(vec2(CONTROL_HEIGHT, CONTROL_HEIGHT), Sense::hover());
+                    logo(ui.painter(), mark, p);
+                    ui.label(title("WTE", 27.0));
+                    if ui.available_width() > 880.0 {
                         ui.label(muted("Windows Theme Engine"));
-                        ui.add_space(22.0);
                     }
-                    for (page, label) in
-                        [(Page::Library, "Library"), (Page::Editor, "Theme editor")]
-                    {
-                        let active = self.page == page;
-                        let resp = ui.add(
-                            Button::new(RichText::new(label).font(strong(14.5)).color(if active {
-                                ui.visuals().hyperlink_color
-                            } else {
-                                ui.visuals().weak_text_color()
-                            }))
-                            .fill(if active {
-                                ui.visuals().widgets.inactive.bg_fill
-                            } else {
-                                ui.visuals().window_fill
-                            })
-                            .stroke(Stroke::NONE)
-                            .corner_radius(5),
-                        );
-                        if resp.clicked() {
-                            if page == Page::Editor && self.draft.is_none() {
-                                self.start_edit(false);
-                            } else {
-                                self.page = page;
-                            }
-                        }
+                    if !narrow {
+                        self.navigation(ui, 120.0);
                     }
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                        if button(ui, "+   New theme", true).clicked() {
+                        if button(ui, "New theme", true).clicked() {
                             self.start_edit(true);
                         }
-                        let mut mode = self.library.app_mode;
-                        ComboBox::from_id_salt("app-appearance")
-                            .selected_text(format!("App · {}", mode.label()))
-                            .show_ui(ui, |ui| {
-                                for value in [Appearance::Light, Appearance::Dark] {
-                                    ui.selectable_value(&mut mode, value, value.label());
-                                }
-                            })
-                            .response
-                            .on_hover_text("Appearance of the WTE window");
-                        if mode != self.library.app_mode {
-                            let mut library = self.library.clone();
-                            library.app_mode = mode;
-                            match self.store.save(&library) {
-                                Ok(()) => {
-                                    self.library = library;
-                                    appearance(ctx, mode);
-                                }
-                                Err(e) => {
-                                    self.message = Some((
-                                        "Could not save app appearance".into(),
-                                        format!("{e:#}"),
-                                    ))
-                                }
+                        let mode = self.library.app_mode;
+                        if button(ui, &format!("App · {}", mode.label()), false)
+                            .on_hover_text("Switch the app between light and dark")
+                            .clicked()
+                        {
+                            self.library.app_mode = if mode == Appearance::Light {
+                                Appearance::Dark
+                            } else {
+                                Appearance::Light
+                            };
+                            if let Err(e) = self.store.save(&self.library) {
+                                self.library.app_mode = mode;
+                                self.message =
+                                    Some(("Could not save appearance".into(), format!("{e:#}")));
                             }
                         }
                     });
                 });
+                if narrow {
+                    let width = (ui.available_width() - ui.spacing().item_spacing.x) * 0.5;
+                    ui.horizontal(|ui| self.navigation(ui, width));
+                }
             });
     }
-    fn library_ui(&mut self, ui: &mut Ui) {
-        let selected = self.current();
-        ui.horizontal(|ui| {
-            ui.label(title("Theme library", 37.0));
-            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                if button(ui, "Theme from wallpaper…", false).clicked() {
-                    self.choose_wallpaper(ui.ctx(), PickFor::NewTheme);
+
+    fn navigation(&mut self, ui: &mut Ui, width: f32) {
+        for (page, label) in [(Page::Library, "Library"), (Page::Editor, "Theme editor")] {
+            if control(ui, label, self.page == page, width).clicked() {
+                if page == Page::Editor && self.draft.is_none() {
+                    self.start_edit(false);
+                } else {
+                    self.page = page;
                 }
-                ui.add_enabled_ui(self.job.is_none(), |ui| {
-                    if button(ui, "Restore", false)
-                        .on_hover_text("Restore settings from before WTE applied a theme")
-                        .clicked()
-                    {
-                        self.confirm_restore = true;
-                    }
-                });
-            });
-        });
-        ui.add_space(11.0);
+            }
+        }
+    }
+
+    fn library_ui(&mut self, ui: &mut Ui, height: f32) {
+        let bottom = ui.cursor().top() + height;
+        let selected = self.current();
         let width = ui.available_width();
-        let h = if width < 870.0 { 245.0 } else { 272.0 };
-        let (rect, _) = ui.allocate_exact_size(vec2(width, h), Sense::hover());
-        let split = rect.left() + width * 0.61;
-        let left = Rect::from_min_max(rect.min, pos2(split, rect.bottom()));
-        let right = Rect::from_min_max(pos2(split, rect.top()), rect.max);
-        let rounding = CornerRadius {
-            nw: 10,
-            sw: 10,
-            ne: 0,
-            se: 0,
+        let compact = width < 715.0;
+        let action_width = if width < 630.0 {
+            (width - ui.spacing().item_spacing.x) * 0.5
+        } else {
+            190.0
         };
-        self.preview(ui, left, &selected, rounding, true);
-        let p = ui.painter();
-        p.rect_filled(
-            right,
-            CornerRadius {
-                nw: 0,
-                sw: 0,
-                ne: 10,
-                se: 10,
-            },
-            INK,
+        let actions = |ui: &mut Ui| {
+            if control(ui, "Theme from wallpaper…", false, action_width)
+                .on_hover_text("Create a theme from a wallpaper")
+                .clicked()
+            {
+                self.choose_wallpaper(ui.ctx(), PickFor::NewTheme);
+            }
+            ui.add_enabled_ui(self.job.is_none(), |ui| {
+                if control(ui, "Restore", false, action_width)
+                    .on_hover_text("Restore settings from before WTE applied a theme")
+                    .clicked()
+                {
+                    self.confirm_restore = true;
+                }
+            });
+        };
+        page_heading(ui, "Theme library", actions);
+        let h = if compact {
+            (height * 0.60).max(400.0)
+        } else {
+            ((height - 100.0) * 0.61).max(236.0)
+        };
+        let (rect, _) = ui.allocate_exact_size(vec2(width, h), Sense::hover());
+        let (left, right, photo_corners, detail_corners) = if compact {
+            let y = rect.bottom() - 201.0;
+            (
+                Rect::from_min_max(rect.min, pos2(rect.right(), y)),
+                Rect::from_min_max(pos2(rect.left(), y), rect.max),
+                CornerRadius {
+                    nw: 10,
+                    ne: 10,
+                    sw: 0,
+                    se: 0,
+                },
+                CornerRadius {
+                    nw: 0,
+                    ne: 0,
+                    sw: 10,
+                    se: 10,
+                },
+            )
+        } else {
+            let split = rect.right() - (width * 0.36).clamp(316.0, 540.0);
+            (
+                Rect::from_min_max(rect.min, pos2(split, rect.bottom())),
+                Rect::from_min_max(pos2(split, rect.top()), rect.max),
+                CornerRadius {
+                    nw: 10,
+                    sw: 10,
+                    ne: 0,
+                    se: 0,
+                },
+                CornerRadius {
+                    nw: 0,
+                    sw: 0,
+                    ne: 10,
+                    se: 10,
+                },
+            )
+        };
+        self.preview(ui, left, &selected, photo_corners, true);
+        let palette = &selected.palette;
+        let ink = color(palette::readable(palette.text, palette.background));
+        let quiet = color(palette::readable(palette.muted, palette.background));
+        ui.painter()
+            .rect_filled(right, detail_corners, color(palette.background));
+        ui.painter().rect_stroke(
+            rect,
+            10,
+            ui.visuals().widgets.noninteractive.bg_stroke,
+            StrokeKind::Inside,
         );
-        let inner = right.shrink2(vec2(24.0, 18.0));
+        let inner = right.shrink2(vec2(18.0, 14.0));
         let mut info = ui.new_child(
             UiBuilder::new()
                 .id_salt("details")
@@ -443,36 +473,25 @@ impl App {
         info.label(
             RichText::new(format!(
                 "{}  ·  {}",
-                if builtin { "PRESET" } else { "CUSTOM" },
-                selected.mode.label().to_uppercase()
+                if builtin { "Preset" } else { "Custom" },
+                selected.mode.label()
             ))
-            .monospace()
-            .size(11.5)
-            .color(if ui.visuals().dark_mode {
-                ui.visuals().hyperlink_color
-            } else {
-                LIME
-            }),
+            .size(13.0)
+            .color(quiet),
         );
         info.add(
-            Label::new(
-                RichText::new(&selected.name)
-                    .font(strong(35.0))
-                    .color(WHITE),
-            )
-            .truncate(),
-        );
-        info.add_space(6.0);
-        let palette_width = info.available_width().min(245.0);
-        let (sw, _) = info.allocate_exact_size(vec2(palette_width, 17.0), Sense::hover());
+            Label::new(title(&selected.name, if compact { 26.0 } else { 32.0 }).color(ink))
+                .truncate(),
+        )
+        .on_hover_text(&selected.name);
+        let (sw, _) = info.allocate_exact_size(vec2(info.available_width(), 16.0), Sense::hover());
         swatches(info.painter(), sw, selected.palette.colors());
         info.label(
             RichText::new(format!("Accent  {}", hex(selected.palette.accent)))
                 .monospace()
                 .size(12.0)
-                .color(Color32::from_rgb(192, 207, 190)),
+                .color(quiet),
         );
-        info.add_space(7.0);
         let components = [
             (selected.desktop, "Windows"),
             (selected.vscode, "VS Code"),
@@ -487,7 +506,7 @@ impl App {
         .filter_map(|(on, name)| on.then_some(name))
         .collect::<Vec<_>>()
         .join("  ·  ");
-        info.label(RichText::new(components).size(13.0).color(WHITE));
+        info.label(RichText::new(components).size(13.0).color(ink));
         let buttons = Rect::from_min_max(pos2(inner.left(), inner.bottom() - 37.0), inner.max);
         let mut actions = ui.new_child(
             UiBuilder::new()
@@ -499,17 +518,12 @@ impl App {
         } else {
             "Apply theme"
         };
-        let apply = actions.add_enabled(
-            self.job.is_none(),
-            Button::new(
-                RichText::new(label)
-                    .font(strong(15.0))
-                    .color(if ui.visuals().dark_mode { WHITE } else { INK }),
-            )
-            .fill(if ui.visuals().dark_mode { GREEN } else { LIME })
-            .min_size(vec2(105.0, 35.0))
-            .corner_radius(5),
-        );
+        let action_width = (inner.width() - actions.spacing().item_spacing.x) * 0.5;
+        let apply = actions
+            .add_enabled_ui(self.job.is_none(), |ui| {
+                control(ui, label, true, action_width)
+            })
+            .inner;
         let apply = if selected.vscode && selected.code_theme.trim().is_empty() {
             apply.on_hover_text(format!(
                 "VS Code uses {}. On first use WTE installs the bundled theme through VS Code.",
@@ -526,16 +540,7 @@ impl App {
                 move |root| apply::run(root, &t),
             );
         }
-        if actions
-            .add(
-                Button::new(RichText::new("Edit theme").font(strong(14.0)).color(WHITE))
-                    .stroke(Stroke::new(1.0_f32, MUTED))
-                    .fill(INK)
-                    .min_size(vec2(84.0, 35.0))
-                    .corner_radius(5),
-            )
-            .clicked()
-        {
+        if control(&mut actions, "Edit theme", false, action_width).clicked() {
             self.start_edit(false);
         }
         ui.add_space(18.0);
@@ -548,27 +553,7 @@ impl App {
                     (Filter::All, "All themes"),
                 ] {
                     let active = f == self.filter;
-                    let resp = ui.add(
-                        Button::new(RichText::new(label).size(13.0).color(if active {
-                            WHITE
-                        } else {
-                            ui.visuals().weak_text_color()
-                        }))
-                        .fill(if active {
-                            GREEN
-                        } else {
-                            ui.visuals().panel_fill
-                        })
-                        .stroke(if active {
-                            Stroke::NONE
-                        } else {
-                            Stroke::new(
-                                1.0_f32,
-                                ui.visuals().widgets.noninteractive.bg_stroke.color,
-                            )
-                        })
-                        .corner_radius(15),
-                    );
+                    let resp = control(ui, label, active, 96.0);
                     if resp.clicked() {
                         self.filter = f;
                     }
@@ -592,18 +577,25 @@ impl App {
                 .corner_radius(7)
                 .show(ui, |ui| {
                     ui.label(title("Your custom collection is empty", 18.0));
-                    if button(ui, "Create a theme", true).clicked() {
+                    if control(ui, "Create a theme", true, 140.0).clicked() {
                         self.start_edit(true);
                     }
                 });
             return;
         }
-        let cols = if width < 800.0 { 2 } else { 3 };
+        let cols = ((width + 8.0) / 220.0).floor().max(1.0) as usize;
+        let cols = cols.min(themes.len());
+        let rows = themes.len().div_ceil(cols);
+        let card_height =
+            ((bottom - ui.cursor().top() - (rows - 1) as f32 * ui.spacing().item_spacing.y)
+                / rows as f32)
+                .max(135.0);
         let card_width = (width - ui.spacing().item_spacing.x * (cols - 1) as f32) / cols as f32;
         for row in themes.chunks(cols) {
             ui.horizontal(|ui| {
                 for t in row {
-                    let (r, resp) = ui.allocate_exact_size(vec2(card_width, 159.0), Sense::click());
+                    let (r, resp) =
+                        ui.allocate_exact_size(vec2(card_width, card_height), Sense::click());
                     resp.widget_info(|| WidgetInfo::labeled(WidgetType::Button, true, &t.name));
                     ui.painter().rect_filled(r, 7, ui.visuals().window_fill);
                     let pic = Rect::from_min_max(
@@ -622,7 +614,7 @@ impl App {
                         },
                         false,
                     );
-                    let active = t.id == self.selected;
+                    let active = t.id == self.library.selected;
                     let p = ui
                         .painter()
                         .with_clip_rect(r.shrink(2.0).intersect(ui.clip_rect()));
@@ -670,8 +662,14 @@ impl App {
                             ui.visuals().hyperlink_color,
                         );
                     }
-                    if resp.on_hover_cursor(CursorIcon::PointingHand).clicked() {
-                        self.selected = t.id.clone();
+                    if resp.on_hover_cursor(CursorIcon::PointingHand).clicked()
+                        && self.library.selected != t.id
+                    {
+                        self.library.selected = t.id.clone();
+                        if let Err(e) = self.store.save(&self.library) {
+                            self.message =
+                                Some(("Could not save theme selection".into(), format!("{e:#}")));
+                        }
                     }
                 }
             });
@@ -710,28 +708,17 @@ impl App {
         if self.show_code {
             editor_sample(ui.painter(), rect, t);
         }
-        let labels = Rect::from_min_size(rect.min + vec2(14.0, 13.0), vec2(154.0, 29.0));
-        ui.painter().rect_filled(labels, 5, INK);
-        for (i, name) in ["Wallpaper", "Editor"].into_iter().enumerate() {
-            let r = Rect::from_min_max(
-                pos2(labels.left() + [3.0, 88.0][i], labels.top() + 3.0),
-                pos2(labels.left() + [86.0, 151.0][i], labels.bottom() - 3.0),
-            );
-            let active = self.show_code == (i == 1);
-            if active {
-                ui.painter().rect_filled(r, 3, WHITE);
-            }
-            ui.painter().text(
-                r.center(),
-                Align2::CENTER_CENTER,
-                name,
-                strong(12.5),
-                if active { INK } else { WHITE },
-            );
-            let resp = ui.interact(r, ui.id().with(("preview-mode", i)), Sense::click());
-            resp.widget_info(|| WidgetInfo::labeled(WidgetType::Button, true, name));
-            if resp.on_hover_cursor(CursorIcon::PointingHand).clicked() {
-                self.show_code = i == 1;
+        let labels = Rect::from_min_size(rect.min + vec2(12.0, 12.0), vec2(188.0, CONTROL_HEIGHT));
+        let mut switches = ui.new_child(
+            UiBuilder::new()
+                .max_rect(labels)
+                .id_salt("preview-mode")
+                .layout(Layout::left_to_right(Align::Center)),
+        );
+        switches.spacing_mut().item_spacing.x = 4.0;
+        for (code, name) in [(false, "Wallpaper"), (true, "Editor")] {
+            if control(&mut switches, name, self.show_code == code, 92.0).clicked() {
+                self.show_code = code;
             }
         }
         let byline = match &t.wallpaper {
@@ -739,9 +726,9 @@ impl App {
             Wallpaper::Local(_) => String::from("Custom wallpaper"),
         };
         let pos = rect.left_bottom() + vec2(14.0, -12.0);
-        let galley = ui
-            .painter()
-            .layout_no_wrap(byline, FontId::proportional(12.0), WHITE);
+        let galley =
+            ui.painter()
+                .layout_no_wrap(byline, FontId::proportional(12.0), Color32::WHITE);
         let box_rect = Rect::from_min_size(
             pos - vec2(0.0, galley.size().y + 8.0),
             galley.size() + vec2(14.0, 8.0),
@@ -749,102 +736,127 @@ impl App {
         ui.painter()
             .rect_filled(box_rect, 3, Color32::from_black_alpha(156));
         ui.painter()
-            .galley(box_rect.min + vec2(7.0, 4.0), galley, WHITE);
+            .galley(box_rect.min + vec2(7.0, 4.0), galley, Color32::WHITE);
     }
-    fn editor_ui(&mut self, ui: &mut Ui) {
+    fn editor_ui(&mut self, ui: &mut Ui, height: f32) {
         let Some(mut draft) = self.draft.take() else {
             self.page = Page::Library;
             return;
         };
         let t = &mut draft.theme;
         let mut save = false;
-        ui.horizontal(|ui| {
-            ui.label(title("Theme editor", 37.0));
-            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                save = button(ui, "Save theme", true).clicked();
-            });
+        page_heading(ui, "Theme editor", |ui| {
+            save = button(ui, "Save theme", true).clicked();
         });
-        ui.add_space(12.0);
-        ui.columns(2,|cols|{
-            let left=&mut cols[0];
-            let w=left.available_width();
-            let (r,_)=left.allocate_exact_size(vec2(w,(w*0.58).clamp(190.0,330.0)),Sense::hover());
-            self.preview(left,r,t,CornerRadius::same(8),true);
-            section(left,"Wallpaper",|ui|{
-                let selected=match &t.wallpaper { Wallpaper::Bundled(p)=>p.title().to_owned(), Wallpaper::Local(p)=>p.file_name().unwrap_or_default().to_string_lossy().into_owned() };
-                ComboBox::from_id_salt("wallpicker").selected_text(selected).width((ui.available_width()-10.0).max(80.0)).show_ui(ui,|ui|{
-                    for p in Photo::ALL {ui.selectable_value(&mut t.wallpaper,Wallpaper::Bundled(p),p.title());}
+        let width = ui.available_width();
+        let gap = ui.spacing().item_spacing.x;
+        if width < 785.0 {
+            self.editor_photo(ui, t, (width * 0.55).max(210.0));
+            self.wallpaper_section(ui, t);
+            effects_section(ui, t);
+            name_section(ui, t);
+            self.palette_section(ui, t);
+            components_section(ui, t);
+        } else if width < 1310.0 {
+            ui.columns(2, |cols| {
+                self.editor_photo(&mut cols[0], t, (height - 377.0).max(235.0));
+                self.wallpaper_section(&mut cols[0], t);
+                effects_section(&mut cols[0], t);
+                name_section(&mut cols[1], t);
+                self.palette_section(&mut cols[1], t);
+                components_section(&mut cols[1], t);
+            });
+        } else {
+            let photo_width = (width - 2.0 * gap) * 0.44;
+            let settings_width = (width - photo_width - 2.0 * gap) / 2.0;
+            ui.horizontal_top(|ui| {
+                column(ui, photo_width, |ui| {
+                    self.editor_photo(ui, t, (height - 200.0).max(235.0));
+                    self.wallpaper_section(ui, t);
                 });
-                if button(ui,"Choose local image…",false).clicked() {
-                    self.choose_wallpaper(ui.ctx(), PickFor::Draft(t.id.clone()));
-                }
-            });
-            section(left,"Wallpaper effects",|ui|{
-                effect(ui,"Blur",&mut t.effects.blur);
-                effect(ui,"Raindrops",&mut t.effects.rain);
-                effect(ui,"Film grain",&mut t.effects.grain);
-            });
-            let right=&mut cols[1];
-            section(right,"Theme name",|ui|{
-                ui.add(TextEdit::singleline(&mut t.name).background_color(ui.visuals().panel_fill).margin(Margin::symmetric(7,5)).desired_width(f32::INFINITY).char_limit(64).hint_text("Theme name"));
-            });
-            section(right,"Color palette",|ui|{
-                ui.horizontal(|ui| {
-                    ui.label("Theme mode");
-                    let mut mode = t.mode;
-                    for value in [Appearance::Light, Appearance::Dark] {
-                        ui.selectable_value(&mut mode, value, value.label());
-                    }
-                    t.set_mode(mode);
+                column(ui, settings_width, |ui| {
+                    name_section(ui, t);
+                    self.palette_section(ui, t);
+                    effects_section(ui, t);
                 });
-                let p=&mut t.palette;
-                Grid::new("palette-editor").num_columns(2).spacing(vec2(16.0,7.0)).show(ui,|ui|{
-                    for (i,(label,value)) in [("Background",&mut p.background),("Surface",&mut p.surface),("Text",&mut p.text),("Muted",&mut p.muted),("Accent",&mut p.accent),("Secondary",&mut p.secondary)].into_iter().enumerate() {
-                        ui.horizontal(|ui|{ui.color_edit_button_srgb(value).on_hover_text(hex(*value));ui.label(label);});
-                        if i%2==1 {ui.end_row();}
-                    }
-                });
-                if button(ui,"Use wallpaper colors",false).clicked() {
-                    match self.photos.palette(&t.wallpaper) {
-                        Ok(palette)=>t.use_wallpaper_colors(palette),
-                        Err(detail)=>self.message=Some(("Could not detect wallpaper colors".into(),detail)),
-                    }
-                }
+                column(ui, settings_width, |ui| components_section(ui, t));
             });
-            section(right,"Components",|ui|{
-                ui.checkbox(&mut t.desktop,"Windows wallpaper, accent and mode");
-                ui.checkbox(&mut t.vscode,"Visual Studio Code");
-                if t.vscode{ui.add(TextEdit::singleline(&mut t.code_theme).background_color(ui.visuals().panel_fill).margin(Margin::symmetric(7,5)).hint_text("ExoVoid, or installed VS Code theme").desired_width(f32::INFINITY)).on_hover_text("Leave blank to use ExoVoid syntax with your palette. WTE installs the bundled ExoVoid theme through VS Code on first use.");}
-                if t.vscode && t.code_theme.trim().is_empty() {
-                    ui.label(muted("First use installs the bundled ExoVoid theme in VS Code if needed."));
-                }
-                ui.checkbox(&mut t.nvim,"Neovim");
-                if t.nvim{ui.add(TextEdit::singleline(&mut t.vim_scheme).background_color(ui.visuals().panel_fill).margin(Margin::symmetric(7,5)).hint_text("ExoVoid syntax, or installed colorscheme").desired_width(f32::INFINITY)).on_hover_text("Leave blank to use matching ExoVoid syntax with your palette.");}
-                ui.horizontal_wrapped(|ui| {
-                    ui.checkbox(&mut t.chrome, "Chrome");
-                    ui.checkbox(&mut t.firefox, "Firefox");
-                });
-                if t.chrome || t.firefox {
-                    ui.label(muted("Apply exports browser themes. Load them in each browser using the paths in Apply results."));
-                }
-                ui.checkbox(&mut t.terminal, "Windows Terminal colors");
-                ui.checkbox(&mut t.terminal_fit, "Fit terminal to tiled windows")
-                    .on_hover_text("Align inherited font metrics with the startup profile, remove padding, hide the scrollbar and allow smooth resizing. Restore recovers your original settings.");
-                ui.checkbox(&mut t.posh, "Oh My Posh prompt");
-                if t.posh {
-                    ui.label(muted("Point your shell’s Oh My Posh configuration at the exported file once. Apply results includes the path."));
-                }
-                ui.checkbox(&mut t.glaze,"GlazeWM border colors");
-                if t.glaze {
-                    border_picker(ui,"Focused",t.palette.accent,&mut t.focused);
-                    border_picker(ui,"Unfocused",t.palette.surface,&mut t.unfocused);
-                }
-            });
-        });
+        }
         self.draft = Some(draft);
         if save && let Err(e) = self.save() {
             self.message = Some(("Could not save theme".into(), format!("{e:#}")));
         }
+    }
+    fn editor_photo(&mut self, ui: &mut Ui, t: &Theme, height: f32) {
+        let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), height), Sense::hover());
+        self.preview(ui, rect, t, CornerRadius::same(8), true);
+    }
+    fn wallpaper_section(&mut self, ui: &mut Ui, t: &mut Theme) {
+        section(ui, "Wallpaper", |ui| {
+            let selected = match &t.wallpaper {
+                Wallpaper::Bundled(p) => p.title().to_owned(),
+                Wallpaper::Local(p) => p
+                    .file_name()
+                    .unwrap_or_default()
+                    .to_string_lossy()
+                    .into_owned(),
+            };
+            ui.spacing_mut().interact_size.y = CONTROL_HEIGHT;
+            ComboBox::from_id_salt("wallpicker")
+                .selected_text(selected)
+                .width(ui.available_width())
+                .truncate()
+                .show_ui(ui, |ui| {
+                    for p in Photo::ALL {
+                        ui.selectable_value(&mut t.wallpaper, Wallpaper::Bundled(p), p.title());
+                    }
+                });
+            if control(ui, "Choose local image…", false, ui.available_width()).clicked() {
+                self.choose_wallpaper(ui.ctx(), PickFor::Draft(t.id.clone()));
+            }
+        });
+    }
+    fn palette_section(&mut self, ui: &mut Ui, t: &mut Theme) {
+        section(ui, "Color palette", |ui| {
+            ui.horizontal(|ui| {
+                ui.label("Theme mode");
+                let mut mode = t.mode;
+                let width = (ui.available_width() - ui.spacing().item_spacing.x) * 0.5;
+                for value in [Appearance::Light, Appearance::Dark] {
+                    if control(ui, value.label(), mode == value, width).clicked() {
+                        mode = value;
+                    }
+                }
+                t.set_mode(mode);
+            });
+            let p = &mut t.palette;
+            ui.columns(2, |cols| {
+                for (i, (label, value)) in [
+                    ("Background", &mut p.background),
+                    ("Surface", &mut p.surface),
+                    ("Text", &mut p.text),
+                    ("Muted", &mut p.muted),
+                    ("Accent", &mut p.accent),
+                    ("Secondary", &mut p.secondary),
+                ]
+                .into_iter()
+                .enumerate()
+                {
+                    cols[i % 2].horizontal(|ui| {
+                        ui.color_edit_button_srgb(value).on_hover_text(hex(*value));
+                        ui.label(label);
+                    });
+                }
+            });
+            if control(ui, "Use wallpaper colors", false, ui.available_width()).clicked() {
+                match self.photos.palette(&t.wallpaper) {
+                    Ok(palette) => t.use_wallpaper_colors(palette),
+                    Err(detail) => {
+                        self.message = Some(("Could not detect wallpaper colors".into(), detail))
+                    }
+                }
+            }
+        });
     }
     fn dialogs(&mut self, ctx: &eframe::egui::Context) {
         if let Some((name, rx)) = &self.job {
@@ -873,8 +885,8 @@ impl App {
                 ui.label(title("Restore previous settings?", 22.0));
                 ui.label("Restore each component to the state saved before its first change. WTE backs up files it replaces during restore. Your theme library stays available.");
                 ui.horizontal(|ui| {
-                    if button(ui, "Cancel", false).clicked() { self.confirm_restore = false; }
-                    if button(ui, "Restore settings", true).clicked() {
+                    if control(ui, "Cancel", false, 145.0).clicked() { self.confirm_restore = false; }
+                    if control(ui, "Restore settings", true, 145.0).clicked() {
                         self.confirm_restore = false;
                         self.start_job(ctx, "Restore results".into(), apply::restore);
                     }
@@ -897,7 +909,7 @@ impl App {
             }
         } else if let Some((name, report)) = &self.report {
             let close = Modal::new(Id::new("report")).show(ctx, |ui| {
-                ui.set_width(470.0);
+                ui.set_width((ctx.content_rect().width() - 48.0).min(470.0));
                 ui.label(title(name, 22.0));
                 ScrollArea::vertical()
                     .max_height((ctx.content_rect().height() - 160.0).max(100.0))
@@ -915,7 +927,7 @@ impl App {
                             );
                             if let Some(path) = &entry.path {
                                 ui.label(small(path.display().to_string()));
-                                if ui.small_button("Copy path").clicked() {
+                                if button(ui, "Copy path", false).clicked() {
                                     ui.ctx().copy_text(path.to_string_lossy().into_owned());
                                 }
                             }
@@ -949,6 +961,91 @@ impl App {
     }
 }
 
+fn page_heading(ui: &mut Ui, name: &str, actions: impl FnOnce(&mut Ui)) {
+    if ui.available_width() < 630.0 {
+        ui.label(title(name, 30.0));
+        ui.allocate_ui_with_layout(
+            vec2(ui.available_width(), CONTROL_HEIGHT),
+            Layout::right_to_left(Align::Center),
+            actions,
+        );
+    } else {
+        ui.horizontal(|ui| {
+            ui.label(title(name, 30.0));
+            ui.with_layout(Layout::right_to_left(Align::Center), actions);
+        });
+    }
+    ui.add_space(4.0);
+}
+fn column(ui: &mut Ui, width: f32, body: impl FnOnce(&mut Ui)) {
+    ui.allocate_ui_with_layout(vec2(width, 0.0), Layout::top_down(Align::Min), |ui| {
+        ui.set_width(width);
+        body(ui);
+    });
+}
+fn name_section(ui: &mut Ui, t: &mut Theme) {
+    section(ui, "Theme name", |ui| {
+        ui.add(
+            TextEdit::singleline(&mut t.name)
+                .background_color(ui.visuals().panel_fill)
+                .margin(Margin::symmetric(7, 5))
+                .desired_width(f32::INFINITY)
+                .char_limit(64)
+                .hint_text("Theme name"),
+        );
+    });
+}
+fn effects_section(ui: &mut Ui, t: &mut Theme) {
+    section(ui, "Wallpaper effects", |ui| {
+        effect(ui, "Blur", &mut t.effects.blur);
+        effect(ui, "Raindrops", &mut t.effects.rain);
+        effect(ui, "Film grain", &mut t.effects.grain);
+    });
+}
+fn components_section(ui: &mut Ui, t: &mut Theme) {
+    section(ui, "Components", |ui| {
+        ui.checkbox(&mut t.desktop, "Windows wallpaper, accent and mode");
+        ui.checkbox(&mut t.vscode, "Visual Studio Code");
+        if t.vscode {
+            ui.add(TextEdit::singleline(&mut t.code_theme).background_color(ui.visuals().panel_fill).margin(Margin::symmetric(7,5)).hint_text("ExoVoid, or installed VS Code theme").desired_width(f32::INFINITY)).on_hover_text("Leave blank to use ExoVoid syntax with your palette. WTE installs the bundled ExoVoid theme through VS Code on first use.");
+        }
+        if t.vscode && t.code_theme.trim().is_empty() {
+            ui.label(muted(
+                "First use installs the bundled ExoVoid theme in VS Code if needed.",
+            ));
+        }
+        ui.checkbox(&mut t.nvim, "Neovim");
+        if t.nvim {
+            ui.add(
+                TextEdit::singleline(&mut t.vim_scheme)
+                    .background_color(ui.visuals().panel_fill)
+                    .margin(Margin::symmetric(7, 5))
+                    .hint_text("ExoVoid syntax, or installed colorscheme")
+                    .desired_width(f32::INFINITY),
+            )
+            .on_hover_text("Leave blank to use matching ExoVoid syntax with your palette.");
+        }
+        ui.horizontal_wrapped(|ui| {
+            ui.checkbox(&mut t.chrome, "Chrome");
+            ui.checkbox(&mut t.firefox, "Firefox");
+        });
+        if t.chrome || t.firefox {
+            ui.label(muted("Apply exports browser themes. Load them in each browser using the paths in Apply results."));
+        }
+        ui.checkbox(&mut t.terminal, "Windows Terminal colors");
+        ui.checkbox(&mut t.terminal_fit, "Fit terminal to tiled windows")
+                    .on_hover_text("Align inherited font metrics with the startup profile, remove padding, hide the scrollbar and allow smooth resizing. Restore recovers your original settings.");
+        ui.checkbox(&mut t.posh, "Oh My Posh prompt");
+        if t.posh {
+            ui.label(muted("Point your shell’s Oh My Posh configuration at the exported file once. Apply results includes the path."));
+        }
+        ui.checkbox(&mut t.glaze, "GlazeWM border colors");
+        if t.glaze {
+            border_picker(ui, "Focused", t.palette.accent, &mut t.focused);
+            border_picker(ui, "Unfocused", t.palette.surface, &mut t.unfocused);
+        }
+    });
+}
 fn section(ui: &mut Ui, name: &str, body: impl FnOnce(&mut Ui)) {
     Frame::new()
         .fill(ui.visuals().window_fill)
@@ -965,8 +1062,15 @@ fn section(ui: &mut Ui, name: &str, body: impl FnOnce(&mut Ui)) {
 }
 fn effect(ui: &mut Ui, label: &str, value: &mut u8) {
     ui.horizontal(|ui| {
-        ui.add_sized([76.0, 20.0], Label::new(label).halign(Align::Min));
-        ui.spacing_mut().slider_width = (ui.available_width() - 55.0).clamp(70.0, 235.0);
+        ui.allocate_ui_with_layout(
+            vec2(76.0, 24.0),
+            Layout::left_to_right(Align::Center),
+            |ui| {
+                ui.set_min_width(76.0);
+                ui.label(label);
+            },
+        );
+        ui.spacing_mut().slider_width = (ui.available_width() - 61.0).max(40.0);
         ui.add(Slider::new(value, 0..=100).suffix("%"))
             .on_hover_text(label);
     });
@@ -978,7 +1082,14 @@ fn border_picker(
     value: &mut Option<crate::theme::Rgb>,
 ) {
     ui.horizontal(|ui| {
-        ui.label(muted(label));
+        ui.allocate_ui_with_layout(
+            vec2(68.0, 24.0),
+            Layout::left_to_right(Align::Center),
+            |ui| {
+                ui.set_min_width(68.0);
+                ui.label(muted(label));
+            },
+        );
         let mut linked = value.is_none();
         if ui.checkbox(&mut linked, "Use palette").changed() {
             *value = if linked { None } else { Some(base) };
@@ -1001,21 +1112,57 @@ impl eframe::App for App {
 
     fn update(&mut self, ctx: &eframe::egui::Context, _frame: &mut eframe::Frame) {
         self.finish_photo();
-        self.header(ctx);
+        let theme = match (&self.page, &self.draft) {
+            (Page::Editor, Some(draft)) => &draft.theme,
+            _ => &self.current(),
+        };
+        let mode = self.library.app_mode;
+        let palette = if theme.mode == mode {
+            theme.palette.clone()
+        } else {
+            theme.palette.variant(mode)
+        };
+        if self
+            .styled
+            .as_ref()
+            .is_none_or(|(old, p)| *old != mode || p != &palette)
+        {
+            if self.styled.as_ref().is_none_or(|(old, _)| *old != mode) {
+                ctx.send_viewport_cmd(ViewportCommand::SetTheme(if mode == Appearance::Dark {
+                    SystemTheme::Dark
+                } else {
+                    SystemTheme::Light
+                }));
+            }
+            appearance(ctx, mode, &palette);
+            self.styled = Some((mode, palette.clone()));
+        }
+        let margin = if ctx.content_rect().width() < 750.0 {
+            14
+        } else if ctx.content_rect().width() > 1450.0 {
+            30
+        } else {
+            24
+        };
+        self.header(ctx, &palette, margin);
         CentralPanel::default()
-            .frame(Frame::new().fill(ctx.style().visuals.panel_fill))
+            .frame(
+                Frame::new()
+                    .fill(ctx.style().visuals.panel_fill)
+                    .inner_margin(Margin::symmetric(margin, 16)),
+            )
             .show(ctx, |ui| {
-                ScrollArea::vertical().show(ui, |ui| {
-                    Frame::new()
-                        .inner_margin(Margin::symmetric(30, 21))
-                        .show(ui, |ui| {
-                            ui.set_width(ui.available_width());
-                            match self.page {
-                                Page::Library => self.library_ui(ui),
-                                Page::Editor => self.editor_ui(ui),
-                            }
-                        });
-                });
+                let height = ui.available_height();
+                ScrollArea::vertical()
+                    .id_salt(self.page == Page::Editor)
+                    .auto_shrink([false, false])
+                    .show(ui, |ui| {
+                        ui.set_width(ui.available_width());
+                        match self.page {
+                            Page::Library => self.library_ui(ui, height),
+                            Page::Editor => self.editor_ui(ui, height),
+                        }
+                    });
             });
         if self.pending_photo.is_some() {
             Modal::new(Id::new("opening-wallpaper")).show(ctx, |ui| {

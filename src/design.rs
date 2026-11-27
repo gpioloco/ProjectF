@@ -1,13 +1,9 @@
-use crate::theme::{Appearance, Rgb};
+use crate::palette::{mix, readable};
+use crate::theme::{Appearance, Palette, Rgb};
 use eframe::egui::*;
 
-pub const PAPER: Color32 = Color32::from_rgb(243, 244, 237);
-pub const WHITE: Color32 = Color32::from_rgb(252, 252, 247);
-pub const INK: Color32 = Color32::from_rgb(27, 40, 33);
-pub const MUTED: Color32 = Color32::from_rgb(83, 100, 89);
-pub const LINE: Color32 = Color32::from_rgb(203, 212, 199);
-pub const GREEN: Color32 = Color32::from_rgb(40, 77, 56);
-pub const LIME: Color32 = Color32::from_rgb(213, 236, 169);
+pub const CONTROL_HEIGHT: f32 = 36.0;
+
 pub fn color([r, g, b]: Rgb) -> Color32 {
     Color32::from_rgb(r, g, b)
 }
@@ -24,25 +20,44 @@ pub fn muted(s: impl Into<String>) -> RichText {
     RichText::new(s).weak().size(14.0)
 }
 pub fn button(ui: &mut Ui, label: &str, primary: bool) -> Response {
-    let (bg, fg, outline) = if primary {
-        (GREEN, Color32::WHITE, GREEN)
-    } else {
-        (
-            ui.visuals().window_fill,
-            ui.visuals().text_color(),
-            ui.visuals().widgets.noninteractive.bg_stroke.color,
-        )
-    };
-    ui.add(
-        Button::new(RichText::new(label).font(strong(14.0)).color(fg))
-            .fill(bg)
-            .stroke(Stroke::new(1.0_f32, outline))
-            .corner_radius(6)
-            .min_size(vec2(0.0, 35.0)),
-    )
+    control(ui, label, primary, 120.0)
 }
 
-pub fn setup(ctx: &Context, mode: Appearance) {
+/// Buttons sharing a row use the same width and baseline.
+pub fn control(ui: &mut Ui, label: &str, emphasized: bool, width: f32) -> Response {
+    let v = ui.visuals();
+    let (fill, ink, stroke) = if emphasized {
+        (v.selection.bg_fill, v.selection.stroke.color, Stroke::NONE)
+    } else {
+        (
+            v.window_fill,
+            v.text_color(),
+            v.widgets.noninteractive.bg_stroke,
+        )
+    };
+    let response = ui
+        .add_sized(
+            [width, CONTROL_HEIGHT],
+            Button::new(title(label, 14.0).color(ink))
+                .fill(fill)
+                .stroke(stroke)
+                .corner_radius(6)
+                .min_size(vec2(width, CONTROL_HEIGHT))
+                .wrap_mode(TextWrapMode::Extend),
+        )
+        .on_hover_cursor(CursorIcon::PointingHand);
+    if response.hovered() || response.has_focus() {
+        ui.painter().rect_stroke(
+            response.rect,
+            6,
+            Stroke::new(1.5_f32, ui.visuals().hyperlink_color),
+            StrokeKind::Inside,
+        );
+    }
+    response
+}
+
+pub fn setup(ctx: &Context) {
     let mut fonts = FontDefinitions::default();
     fonts.font_data.insert(
         "dm".into(),
@@ -63,17 +78,12 @@ pub fn setup(ctx: &Context, mode: Appearance) {
         .families
         .insert(FontFamily::Name("semibold".into()), bold);
     ctx.set_fonts(fonts);
-    appearance(ctx, mode);
 }
 
-pub fn appearance(ctx: &Context, mode: Appearance) {
+pub fn appearance(ctx: &Context, mode: Appearance, palette: &Palette) {
     let dark = mode == Appearance::Dark;
-    ctx.set_theme(if dark { Theme::Dark } else { Theme::Light });
-    ctx.send_viewport_cmd(ViewportCommand::SetTheme(if dark {
-        SystemTheme::Dark
-    } else {
-        SystemTheme::Light
-    }));
+    let theme = if dark { Theme::Dark } else { Theme::Light };
+    ctx.set_theme(theme);
     let mut style = (*ctx.style()).clone();
     let v = &mut style.visuals;
     *v = if dark {
@@ -81,38 +91,50 @@ pub fn appearance(ctx: &Context, mode: Appearance) {
     } else {
         Visuals::light()
     };
-    let tone = |day, night| if dark { color(night) } else { day };
-    v.panel_fill = tone(PAPER, [23, 30, 26]);
-    v.window_fill = tone(WHITE, [35, 45, 38]);
-    v.extreme_bg_color = v.panel_fill;
-    v.override_text_color = Some(tone(INK, [231, 238, 229]));
-    v.weak_text_color = Some(tone(MUTED, [173, 191, 177]));
-    v.hyperlink_color = tone(GREEN, [139, 168, 130]);
-    v.error_fg_color = tone(Color32::from_rgb(153, 49, 39), [255, 159, 147]);
-    v.selection.bg_fill = GREEN;
-    v.selection.stroke = Stroke::new(1.0_f32, WHITE);
-    v.widgets.noninteractive.bg_stroke = Stroke::new(1.0_f32, tone(LINE, [71, 86, 74]));
-    v.widgets.inactive.bg_fill = tone(Color32::from_rgb(222, 230, 218), [54, 68, 58]);
-    v.widgets.hovered.bg_fill = tone(Color32::from_rgb(209, 224, 202), [70, 89, 75]);
-    v.widgets.active.bg_fill = tone(LIME, [69, 95, 66]);
-    style.spacing.item_spacing = vec2(9.0, 7.0);
-    style.spacing.button_padding = vec2(13.0, 6.0);
+    let p = palette;
+    v.panel_fill = color(p.background);
+    v.window_fill = color(p.surface);
+    v.extreme_bg_color = color(p.background);
+    v.override_text_color = Some(color(readable(p.text, p.surface)));
+    v.weak_text_color = Some(color(readable(p.muted, p.surface)));
+    v.hyperlink_color = color(readable(p.accent, p.surface));
+    v.selection.bg_fill = color(p.accent);
+    v.selection.stroke = Stroke::new(1.0_f32, color(readable(p.text, p.accent)));
+    let outline = Stroke::new(1.0_f32, color(mix(p.surface, p.muted, 0.40)));
+    v.window_stroke = outline;
+    v.widgets.noninteractive.bg_stroke = outline;
+    v.widgets.noninteractive.fg_stroke.color = v.text_color();
+    for (widget, amount) in [
+        (&mut v.widgets.inactive, 0.12),
+        (&mut v.widgets.hovered, 0.28),
+        (&mut v.widgets.active, 0.42),
+    ] {
+        let fill = mix(p.surface, p.accent, amount);
+        widget.bg_fill = color(fill);
+        widget.weak_bg_fill = color(fill);
+        widget.bg_stroke = outline;
+        widget.fg_stroke.color = color(readable(p.text, fill));
+    }
+    style.spacing.item_spacing = vec2(8.0, 8.0);
+    style.spacing.interact_size.y = 28.0;
+    style.spacing.button_padding = vec2(10.0, 5.0);
     style
         .text_styles
         .insert(TextStyle::Body, FontId::proportional(15.0));
     style
         .text_styles
         .insert(TextStyle::Button, FontId::proportional(14.0));
-    ctx.set_style(style);
+    ctx.set_style_of(theme, style);
 }
 
-pub fn logo(p: &Painter, r: Rect) {
-    p.rect_filled(r, 7, GREEN);
+pub fn logo(p: &Painter, r: Rect, palette: &Palette) {
+    p.rect_filled(r, 7, color(palette.accent));
     let s = r.width() / 36.0;
+    let ink = readable(palette.text, palette.accent);
     for (i, c) in [
-        LIME,
-        Color32::from_rgb(162, 201, 138),
-        Color32::from_rgb(112, 165, 115),
+        color(ink),
+        color(mix(ink, palette.accent, 0.24)),
+        color(mix(ink, palette.accent, 0.48)),
     ]
     .into_iter()
     .enumerate()
@@ -159,7 +181,10 @@ pub fn swatches(p: &Painter, rect: Rect, colors: [Rgb; 6]) {
 pub fn editor_sample(p: &Painter, rect: Rect, t: &crate::theme::Theme) {
     let q = &t.palette;
     let ink = |source| color(crate::exovoid::ink(t.mode, source));
-    let r = Rect::from_center_size(rect.center(), vec2((rect.width() - 48.0).min(355.0), 139.0));
+    let scale = (rect.width() / 630.0)
+        .min((rect.height() - 100.0) / 139.0)
+        .clamp(0.68, 1.65);
+    let r = Rect::from_center_size(rect.center(), vec2(355.0, 139.0) * scale);
     p.rect_filled(
         r.translate(vec2(0.0, 5.0)),
         7,
@@ -174,16 +199,20 @@ pub fn editor_sample(p: &Painter, rect: Rect, t: &crate::theme::Theme) {
     );
     let inner = r.shrink(2.0);
     p.rect_filled(
-        Rect::from_min_size(inner.min, vec2(inner.width(), 27.0)),
+        Rect::from_min_size(inner.min, vec2(inner.width(), 27.0 * scale)),
         4,
         color(q.surface),
     );
-    p.circle_filled(inner.min + vec2(13.0, 14.0), 3.5, color(q.accent));
+    p.circle_filled(
+        inner.min + vec2(13.0, 14.0) * scale,
+        3.5 * scale,
+        color(q.accent),
+    );
     p.text(
-        inner.min + vec2(23.0, 14.0),
+        inner.min + vec2(23.0, 14.0) * scale,
         Align2::LEFT_CENTER,
         "palette.rs",
-        FontId::monospace(11.0),
+        FontId::monospace(11.0 * scale),
         ink(crate::exovoid::workbench("tab.activeForeground")),
     );
     let plain = crate::exovoid::workbench("editor.foreground");
@@ -206,12 +235,12 @@ pub fn editor_sample(p: &Painter, rect: Rect, t: &crate::theme::Theme) {
         &[("}", plain)],
     ];
     for (i, spans) in lines.iter().enumerate() {
-        let y = inner.top() + 40.0 + 21.0 * i as f32;
+        let y = inner.top() + (40.0 + 21.0 * i as f32) * scale;
         p.text(
-            pos2(inner.left() + 14.0, y),
+            pos2(inner.left() + 14.0 * scale, y),
             Align2::LEFT_CENTER,
             (i + 1).to_string(),
-            FontId::monospace(11.0),
+            FontId::monospace(11.0 * scale),
             ink(crate::exovoid::workbench("editorLineNumber.foreground")),
         );
         let mut job = epaint::text::LayoutJob::default();
@@ -219,12 +248,12 @@ pub fn editor_sample(p: &Painter, rect: Rect, t: &crate::theme::Theme) {
             job.append(
                 token,
                 0.0,
-                TextFormat::simple(FontId::monospace(13.0), ink(hex)),
+                TextFormat::simple(FontId::monospace(13.0 * scale), ink(hex)),
             );
         }
         let line = p.layout_job(job);
         p.galley(
-            pos2(inner.left() + 38.0, y - line.size().y / 2.0),
+            pos2(inner.left() + 38.0 * scale, y - line.size().y / 2.0),
             line,
             Color32::WHITE,
         );

@@ -1,14 +1,18 @@
 # WTE · Windows Theme Engine
 
-WTE is a portable Rust app for Windows 11. Apply one palette across your wallpaper, Windows appearance, VS Code, Neovim, Windows Terminal and GlazeWM borders. Export a matching Oh My Posh prompt and themes for Chrome and Firefox. Start from one of three bundled presets or let WTE pick an accent and build a theme from a photograph. VS Code and Neovim share ExoVoid syntax colors in both modes, with darker ink for light backgrounds.
+WTE is a Rust desktop app for Windows 11. Apply one palette across your wallpaper, Windows appearance, VS Code, Neovim, Windows Terminal and GlazeWM borders. Export a matching Oh My Posh prompt and themes for Chrome and Firefox. Start from one of three bundled presets or let WTE pick an accent and build a theme from a photograph. VS Code and Neovim share ExoVoid syntax colors in both modes, with darker ink for light backgrounds.
 
-[Run the portable app](#run-the-portable-app) · [Build from source](#build-from-source) · [Apply a preset](#apply-a-preset) · [Restore previous settings](#restore-previous-settings) · [Create a custom theme](#create-a-custom-theme) · [Browser setup](#load-a-browser-theme) · [Screenshots](#screenshot-gallery)
+[Install WTE](#install-wte) · [Build from source](#build-from-source) · [Apply a preset](#apply-a-preset) · [Restore previous settings](#restore-previous-settings) · [Create a custom theme](#create-a-custom-theme) · [Browser setup](#load-a-browser-theme) · [Screenshots](#screenshot-gallery)
 
 ![WTE’s theme library with the Canopy forest wallpaper selected and the Sienna and Blue Hour presets beside it](docs/screenshots/theme-library.png)
 
-## Run the portable app
+## Install WTE
 
-Extract `WTE-0.5.0-windows-x64.zip` and double-click `wte.exe`. WTE opens in **Library**. Choose **App · Light** or **App · Dark** in the top bar to change the WTE window immediately. It remembers this preference when you reopen it. Each integration is optional. The apply results identify any enabled integration WTE could not find.
+Run `WTE-0.6.0-windows-x64-setup.exe`, then open **Windows Theme Engine** from Start. Setup installs for your account in `%LOCALAPPDATA%\Programs\WTE`. To upgrade, close WTE and run the new installer. To uninstall, use **Settings → Apps → Installed apps → Windows Theme Engine**. Your saved themes, pictures and restore points stay in `%LOCALAPPDATA%\WTE`. If you also want to undo applied themes, use **Library → Restore** before uninstalling.
+
+For portable use, extract `WTE-0.6.0-windows-x64.zip` and double-click `wte.exe`.
+
+WTE opens in **Library**. Select a card to preview its wallpaper and use its palette throughout the app. The **App · Light** or **App · Dark** button switches the window appearance independently of the selected theme. WTE remembers both choices. The editor follows draft palette changes as you make them. Each integration is optional. The apply results identify any enabled integration WTE could not find.
 
 ## Build from source
 
@@ -23,6 +27,16 @@ cargo build --release --locked
 .\target\release\wte.exe
 ```
 
+### Build the Windows installer
+
+Install NSIS 3 on the build machine. On Windows the packager checks the standard NSIS installation directory and `PATH`. From the repository root, run the following command. [NSIS download](https://nsis.sourceforge.io/Download)
+
+```sh
+cargo installer
+```
+
+Cargo builds the x64 Windows release and packages it as `target/dist/WTE-0.6.0-windows-x64-setup.exe`. A custom `CARGO_TARGET_DIR` moves the `dist` folder there. The installer contains the application, fonts, wallpapers and license notices. It runs offline with standard user permissions.
+
 ### From Linux for Windows x64
 
 Install the MinGW-w64 x86-64 toolchain and make its `x86_64-w64-mingw32-gcc`, `x86_64-w64-mingw32-windres` and `x86_64-w64-mingw32-ar` commands available on `PATH`. From the repository root, run the following commands.
@@ -32,7 +46,7 @@ rustup target add x86_64-pc-windows-gnu
 cargo build --release --locked --target x86_64-pc-windows-gnu
 ```
 
-Copy `target/x86_64-pc-windows-gnu/release/wte.exe` to the Windows machine. The executable includes the preset wallpapers and fonts.
+Copy `target/x86_64-pc-windows-gnu/release/wte.exe` to the Windows machine. The executable includes the preset wallpapers and fonts. To build the setup executable on Linux, also install NSIS 3 with `makensis` on `PATH` and run `cargo installer`.
 
 ### Run the tests
 
@@ -132,7 +146,7 @@ WTE stores its restore point under `%LOCALAPPDATA%\WTE`. If you edited a file af
 
 Full restore points begin with version 0.4. WTE can also recover the earliest available VS Code backup from an older release and a GlazeWM backup when its other settings match the current profile. Earlier releases did not capture the original desktop or Neovim state.
 
-WTE runs with the current user’s privileges. It works offline without a service, scheduled task, startup entry, direct registry edits or editor extension downloads. The portable build is unsigned. An organization’s application-control policy may require an approved or signed build. The repository includes the Rust source, dependency lockfile and Windows privilege manifest for review.
+WTE runs with the current user’s privileges. Theme switching works offline without a service, scheduled task, startup entry, direct registry edits or editor extension downloads. Setup registers WTE in the current user’s Installed apps list. Local builds of the app and installer are unsigned. An organization’s application-control policy may require an approved or signed build. The repository includes the Rust source, dependency lockfile and Windows privilege manifest for review.
 
 ## Credits
 

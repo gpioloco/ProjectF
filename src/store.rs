@@ -12,10 +12,16 @@ use tempfile::NamedTempFile;
 #[derive(Clone, Serialize, Deserialize)]
 pub struct Library {
     pub themes: Vec<Theme>,
+    #[serde(default = "default_selection")]
+    pub selected: String,
     #[serde(default)]
     dark_accents_updated: bool,
     #[serde(default = "default_app_mode")]
     pub app_mode: Appearance,
+}
+
+fn default_selection() -> String {
+    "canopy".into()
 }
 
 fn default_app_mode() -> Appearance {
@@ -25,6 +31,7 @@ impl Default for Library {
     fn default() -> Self {
         Self {
             themes: Vec::new(),
+            selected: default_selection(),
             dark_accents_updated: true,
             app_mode: default_app_mode(),
         }
@@ -243,6 +250,8 @@ mod tests {
         )?;
         let mut library = store.load()?;
         assert_eq!(library.app_mode, Appearance::Light);
+        assert_eq!(library.selected, "canopy");
+        library.selected = original.id.clone();
         assert_eq!(library.themes[0].palette, original.palette);
         library.app_mode = Appearance::Dark;
         let theme = &mut library.themes[0];
@@ -253,6 +262,7 @@ mod tests {
         store.save(&library)?;
         let mut loaded = store.load()?;
         assert_eq!(loaded.app_mode, Appearance::Dark);
+        assert_eq!(loaded.selected, original.id);
         let saved = &mut loaded.themes[0];
         assert_eq!(saved.mode, Appearance::Light);
         saved.set_mode(Appearance::Dark);
