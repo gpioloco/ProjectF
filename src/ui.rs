@@ -1029,8 +1029,14 @@ fn components_section(ui: &mut Ui, t: &mut Theme) {
             ui.checkbox(&mut t.chrome, "Chrome");
             ui.checkbox(&mut t.firefox, "Firefox");
         });
-        if t.chrome || t.firefox {
-            ui.label(muted("Apply exports browser themes. Load them in each browser using the paths in Apply results."));
+        if t.chrome {
+            ui.label(muted("Load the Chrome folder once. Fully exit and reopen Chrome after switching palettes."))
+                .on_hover_text("For live Windows accent changes, use Chrome’s default theme and enable Follow device colors in Chrome’s Appearance settings.");
+        }
+        if t.firefox {
+            ui.label(muted(
+                "Load the exported theme in Firefox using the path in Apply results.",
+            ));
         }
         ui.checkbox(&mut t.terminal, "Windows Terminal colors");
         ui.checkbox(&mut t.terminal_fit, "Fit terminal to tiled windows")

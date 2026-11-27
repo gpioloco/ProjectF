@@ -666,6 +666,14 @@ pub fn restore(root: &Path) -> Result<Report> {
             },
             Change::File { path, original, .. } => {
                 crate::restore::restore_file(path, original.as_deref(), &backups, i)
+                    .and_then(|()| {
+                        if component == Component::Chrome
+                            && path == &crate::browser::chrome_folder(root).join("manifest.json")
+                        {
+                            crate::browser::clear_chrome_cache(root)?;
+                        }
+                        Ok(())
+                    })
                     .map_err(|e| anyhow::anyhow!("{}: {e:#}", path.display()))
             }
             #[cfg(windows)]

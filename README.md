@@ -8,9 +8,9 @@ WTE is a Rust desktop app for Windows 11. Apply one palette across your wallpape
 
 ## Install WTE
 
-Run `WTE-0.6.0-windows-x64-setup.exe`, then open **Windows Theme Engine** from Start. Setup installs for your account in `%LOCALAPPDATA%\Programs\WTE`. To upgrade, close WTE and run the new installer. To uninstall, use **Settings → Apps → Installed apps → Windows Theme Engine**. Your saved themes, pictures and restore points stay in `%LOCALAPPDATA%\WTE`. If you also want to undo applied themes, use **Library → Restore** before uninstalling.
+Run `WTE-0.6.1-windows-x64-setup.exe`, then open **Windows Theme Engine** from Start. Setup installs for your account in `%LOCALAPPDATA%\Programs\WTE`. To upgrade, close WTE and run the new installer. To uninstall, use **Settings → Apps → Installed apps → Windows Theme Engine**. Your saved themes, pictures and restore points stay in `%LOCALAPPDATA%\WTE`. If you also want to undo applied themes, use **Library → Restore** before uninstalling.
 
-For portable use, extract `WTE-0.6.0-windows-x64.zip` and double-click `wte.exe`.
+For portable use, extract `WTE-0.6.1-windows-x64.zip` and double-click `wte.exe`.
 
 WTE opens in **Library**. Select a card to preview its wallpaper and use its palette throughout the app. The **App · Light** or **App · Dark** button switches the window appearance independently of the selected theme. WTE remembers both choices. The editor follows draft palette changes as you make them. Each integration is optional. The apply results identify any enabled integration WTE could not find.
 
@@ -35,7 +35,7 @@ Install NSIS 3 on the build machine. On Windows the packager checks the standard
 cargo installer
 ```
 
-Cargo builds the x64 Windows release and packages it as `target/dist/WTE-0.6.0-windows-x64-setup.exe`. A custom `CARGO_TARGET_DIR` moves the `dist` folder there. The installer contains the application, fonts, wallpapers and license notices. It runs offline with standard user permissions.
+Cargo builds the x64 Windows release and packages it as `target/dist/WTE-0.6.1-windows-x64-setup.exe`. A custom `CARGO_TARGET_DIR` moves the `dist` folder there. The installer contains the application, fonts, wallpapers and license notices. It runs offline with standard user permissions.
 
 ### From Linux for Windows x64
 
@@ -89,7 +89,7 @@ Choose **Save theme** to copy the imported wallpaper to the local library and re
 | GlazeWM v3 | WTE edits the colors of the focused and unfocused borders in `%USERPROFILE%\.glzr\glazewm\config.yaml` or the absolute path in `GLAZEWM_CONFIG_PATH`. The existing border enablement, tile gaps and window rules are preserved. When colors change, WTE requests a reload and redraw through the GlazeWM CLI. Border effects require Windows 11. [GlazeWM configuration](https://github.com/glzr-io/glazewm#config-window-effects) |
 | Windows Terminal | WTE updates the named color scheme, profile defaults and explicit profile color overrides in existing Stable, Preview, Canary and unpackaged settings. It preserves JSONC comments. Presets include Terminal colors. Themes saved before 0.5 can opt in from the editor. [Windows Terminal settings paths](https://learn.microsoft.com/en-us/windows/terminal/faq#where-can-i-find-the-settings-file) |
 | Oh My Posh | Exports a local prompt with a path, Git branch and command marker. Its stable filename lets the same shell profile follow subsequent WTE themes. [Oh My Posh configuration](https://ohmyposh.dev/docs/installation/customize) |
-| Chrome | Exports a Manifest V3 theme folder with colors for the frame, toolbar, tabs, address bar and new tab page. [Chrome theme format](https://developer.chrome.com/docs/extensions/develop/ui/themes) |
+| Chrome | Updates one unpacked Manifest V3 theme with colors for the frame, toolbar, tabs, address bar and new tab page. Chrome picks up the latest palette on its next full launch. [Chrome theme format](https://developer.chrome.com/docs/extensions/develop/ui/themes) |
 | Firefox | Exports a static WebExtension theme as a single XPI with colors for the frame, toolbar, tabs, address bar and new tab page. It declares the theme’s light or dark color scheme. [Firefox theme format](https://developer.mozilla.org/en-US/docs/Mozilla/Add-ons/WebExtensions/manifest.json/theme) |
 
 ### First use with VS Code
@@ -125,10 +125,20 @@ Open a new shell after applying a theme. WTE writes the local prompt file. Your 
 
 To add a browser to a preset, choose **Edit theme** to make a custom copy. In the editor, enable **Chrome**, **Firefox**, or both under **Components**. Choose **Save theme**, then **Apply theme** in the library. **Apply results → Copy path** gives you the exact folder or file for each browser. Browser components start turned off, including when opening older libraries.
 
-- **Chrome.** Open `chrome://extensions`. If your organization permits it, enable **Developer mode**, choose **Load unpacked** and select the exported **chrome** folder. Check **Settings → Appearance → Theme** for the WTE theme name. [Chrome’s local installation guide](https://developer.chrome.com/docs/extensions/get-started/tutorial/hello-world#load-unpacked)
-- **Firefox.** Open `about:debugging#/runtime/this-firefox`, choose **Load Temporary Add-on** and select **firefox.xpi**. Check **Add-ons and themes → Themes** for the enabled theme. A temporary theme lasts until Firefox restarts. Lasting installation in standard Firefox requires a Mozilla-signed package. [Firefox temporary installation](https://extensionworkshop.com/documentation/develop/temporary-installation-in-firefox/) · [Mozilla signing and distribution](https://extensionworkshop.com/documentation/publish/signing-and-distribution-overview/)
+**Chrome with the full WTE palette**
 
-WTE keeps each theme’s exports under `%LOCALAPPDATA%\WTE\browsers\wte-<theme-id>\`. After changing a theme, apply it in WTE and load its updated export in the browser. Each browser controls activation. Chrome uses its own appearance setting for internal pages such as Settings. The exports contain a color manifest and request no permissions.
+1. Apply a WTE theme with **Chrome** enabled. In `chrome://extensions`, enable **Developer mode** if your organization permits it. Select **Load unpacked** and open `%LOCALAPPDATA%\WTE\browsers\chrome`. Do this once per Chrome profile, including when upgrading from an older WTE theme-specific folder. [Chrome’s local installation guide](https://developer.chrome.com/docs/extensions/get-started/tutorial/hello-world#load-unpacked)
+2. Apply another WTE theme with **Chrome** enabled. WTE replaces the palette in the same folder. Chrome keeps displaying the current palette until its next full launch. Use Chrome’s menu → **Exit**, then reopen it. If WTE reports a locked cache, exit Chrome and apply the theme again before reopening. [Chromium’s theme loading implementation](https://chromium.googlesource.com/chromium/src/+/main/chrome/browser/themes/theme_service.cc)
+
+**Chrome with live Windows colors**
+
+For changes while Chrome is open, use Chrome’s default theme. In **Settings → Appearance**, enable **Follow device colors** and select **Device** for light/dark mode. Enable **Windows wallpaper, accent and mode** in WTE for each theme you switch between. Chrome builds its own palette from the Windows accent when Windows activates the theme. This option works with the **Chrome** export checkbox off. [Chromium’s Windows appearance setting](https://chromium.googlesource.com/chromium/src.git/+/e13dfc49bce115b470413f4a5814353eb7f2942a) · [Chrome appearance modes](https://support.google.com/chrome/answer/9275525?hl=en)
+
+**Firefox**
+
+Open `about:debugging#/runtime/this-firefox`, choose **Load Temporary Add-on** and select **firefox.xpi**. Check **Add-ons and themes → Themes** for the enabled theme. A temporary theme lasts until Firefox restarts. Lasting installation in standard Firefox requires a Mozilla-signed package. [Firefox temporary installation](https://extensionworkshop.com/documentation/develop/temporary-installation-in-firefox/) · [Mozilla signing and distribution](https://extensionworkshop.com/documentation/publish/signing-and-distribution-overview/)
+
+Firefox exports remain in `%LOCALAPPDATA%\WTE\browsers\wte-<theme-id>\firefox.xpi`. Reload the exported file in Firefox after changing its palette. Both browser exports contain a color manifest and request no permissions.
 
 ## Restore previous settings
 

@@ -4,9 +4,22 @@ use crate::{
     restore::{Component, RestorePoint},
     theme::{Theme, hex},
 };
-use anyhow::{Result, ensure};
+use anyhow::{Context, Result, ensure};
 use serde_json::{Value, json};
 use std::path::{Path, PathBuf};
+
+pub fn chrome_folder(root: &Path) -> PathBuf {
+    root.join("browsers").join("chrome")
+}
+
+// Chrome reads this generated pack before it reads the unpacked theme's colors.
+// Removing it from our export makes Chrome rebuild it on its next full startup.
+pub fn clear_chrome_cache(root: &Path) -> Result<()> {
+    match std::fs::remove_file(chrome_folder(root).join("Cached Theme.pak")) {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        result => result.context("Could not clear the Chrome theme cache in the WTE export. Fully exit Chrome and retry in WTE"),
+    }
+}
 
 #[derive(Clone, Copy)]
 pub enum Browser {
@@ -24,7 +37,7 @@ impl Browser {
     pub fn instructions(self) -> &'static str {
         match self {
             Self::Chrome => {
-                "Exported. In chrome://extensions, turn on Developer mode if permitted, choose Load unpacked and select this folder."
+                "Load this shared folder once per Chrome profile using chrome://extensions → Developer mode → Load unpacked, if permitted. Future WTE themes with Chrome enabled update the same folder. Fully exit and reopen Chrome to see the latest palette."
             }
             Self::Firefox => {
                 "Exported. In about:debugging → This Firefox, choose Load Temporary Add-on and select this file. Firefox removes temporary themes on restart."
@@ -88,16 +101,21 @@ impl Browser {
                     .all(|c| c.is_ascii_alphanumeric() || c == b'-'),
             "Invalid browser theme identifier"
         );
-        let directory = root.join("browsers").join(format!("wte-{}", theme.id));
         let json = serde_json::to_vec_pretty(&self.manifest(theme))?;
         match self {
             Self::Chrome => {
-                let folder = directory.join("chrome");
+                let folder = chrome_folder(root);
                 point.write(Component::Chrome, &folder.join("manifest.json"), &json)?;
+                // Also retry cache removal when a previous apply wrote the manifest
+                // successfully but Chrome still held its cache open.
+                clear_chrome_cache(root)?;
                 Ok(folder)
             }
             Self::Firefox => {
-                let path = directory.join("firefox.xpi");
+                let path = root
+                    .join("browsers")
+                    .join(format!("wte-{}", theme.id))
+                    .join("firefox.xpi");
                 point.write(
                     Component::Firefox,
                     &path,
@@ -117,6 +135,49 @@ mod tests {
         theme::{Appearance, Photo},
     };
     use std::{fs, io::Read};
+
+    #[test]
+    fn switching_chrome_themes_reuses_the_install_and_restores_the_original_export() -> Result<()> {
+        let tmp = tempfile::tempdir()?;
+        let root = tmp.path();
+        let folder = chrome_folder(root);
+        let manifest = folder.join("manifest.json");
+        let cache = folder.join("Cached Theme.pak");
+        let legacy = root.join("browsers/wte-canopy/chrome/manifest.json");
+        fs::create_dir_all(legacy.parent().unwrap())?;
+        fs::write(&legacy, b"legacy theme")?;
+        fs::create_dir_all(&folder)?;
+        fs::write(&manifest, b"original")?;
+        let mut point = RestorePoint::load(root)?;
+        let canopy = Theme::preset(Photo::Canopy);
+        let sienna = Theme::preset(Photo::Sienna);
+        assert_eq!(Browser::Chrome.export(&mut point, root, &canopy)?, folder);
+        // Simulate a cache that cannot be removed, then retry the same palette.
+        fs::create_dir(&cache)?;
+        assert!(Browser::Chrome.export(&mut point, root, &sienna).is_err());
+        fs::remove_dir(&cache)?;
+        fs::write(&cache, b"Canopy cache")?;
+        assert_eq!(Browser::Chrome.export(&mut point, root, &sienna)?, folder);
+        let active: Value = serde_json::from_slice(&fs::read(&manifest)?)?;
+        assert_eq!(
+            active["theme"]["colors"]["frame"],
+            json!(sienna.palette.background)
+        );
+        assert!(!cache.exists());
+        fs::write(&cache, b"Sienna cache")?;
+        Browser::Firefox.export(&mut point, root, &canopy)?;
+        assert!(cache.exists());
+        assert!(
+            apply::restore(root)?
+                .entries
+                .iter()
+                .all(|entry| !entry.error)
+        );
+        assert_eq!(fs::read(manifest)?, b"original");
+        assert_eq!(fs::read(legacy)?, b"legacy theme");
+        assert!(!cache.exists());
+        Ok(())
+    }
 
     #[test]
     fn browser_only_apply_exports_selected_components_and_reuses_paths() -> Result<()> {
