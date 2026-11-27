@@ -169,7 +169,7 @@ impl Theme {
     }
 
     fn new(id: String, name: String, wallpaper: Wallpaper, palette: Palette) -> Self {
-        Self {
+        let mut theme = Self {
             id,
             name,
             wallpaper,
@@ -187,6 +187,17 @@ impl Theme {
             vim_scheme: String::new(),
             focused: None,
             unfocused: None,
+        };
+        theme.soften_dark_accents();
+        theme
+    }
+    pub fn soften_dark_accents(&mut self) {
+        if self.mode == Appearance::Dark {
+            self.alternate_palette
+                .get_or_insert_with(|| self.palette.variant(Appearance::Light));
+            self.palette.soften_dark_accents();
+        } else if let Some(dark) = &mut self.alternate_palette {
+            dark.soften_dark_accents();
         }
     }
     pub fn set_mode(&mut self, mode: Appearance) {
@@ -205,6 +216,7 @@ impl Theme {
         self.palette = dark;
         self.alternate_palette = None;
         self.mode = Appearance::Dark;
+        self.soften_dark_accents();
         self.set_mode(mode);
     }
 

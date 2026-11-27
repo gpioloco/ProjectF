@@ -178,13 +178,25 @@ pub fn glazewm(input: &str, t: &Theme) -> Result<String> {
     Ok(output)
 }
 
+pub const NVIM_CONFIG_LOADER: &str = r#"-- Windows Theme Engine
+if vim.g.loaded_wte_theme_engine then return end
+local package_dir = vim.fn.stdpath("data") .. "/site/pack/wte/start/wte"
+local loader = package_dir .. "/plugin/wte.vim"
+if vim.fn.filereadable(loader) == 1 then
+  vim.opt.runtimepath:append(package_dir)
+  vim.cmd("source " .. vim.fn.fnameescape(loader))
+end
+"#;
+
 pub const NVIM_PLUGIN: &str = r#"" Windows Theme Engine
+if exists('g:loaded_wte_theme_engine') | finish | endif
+let g:loaded_wte_theme_engine = 1
 let s:selection = expand('<sfile>:p:h:h') . '/active.txt'
 let s:last = []
 function! s:WteRefresh() abort
   if !filereadable(s:selection) | return | endif
   let l:active = readfile(s:selection, '', 2)
-  if len(l:active) != 2 || l:active ==# s:last || l:active[0] !~# '^[a-zA-Z0-9_-][a-zA-Z0-9_.-]*$' | return | endif
+  if len(l:active) != 2 || (l:active ==# s:last && get(g:, 'colors_name', '') ==# l:active[0]) || l:active[0] !~# '^[a-zA-Z0-9_-][a-zA-Z0-9_.-]*$' | return | endif
   try
     execute 'colorscheme ' . l:active[0]
     let s:last = l:active

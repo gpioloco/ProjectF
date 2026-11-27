@@ -4,8 +4,13 @@ mod browser;
 #[cfg_attr(not(any(windows, test)), allow(dead_code))]
 mod config;
 mod design;
+#[cfg(windows)]
+mod desktop;
 mod exovoid;
+#[cfg(any(windows, test))]
+mod nvim;
 mod palette;
+mod restore;
 mod store;
 mod theme;
 mod ui;
@@ -49,7 +54,11 @@ fn main() -> eframe::Result {
             let store = store::Store::open()?;
             let library = store.load()?;
             design::setup(&cc.egui_ctx, library.app_mode);
-            Ok(Box::new(ui::App::new(store, library)))
+            let picker = rfd::FileDialog::new()
+                .set_parent(cc)
+                .set_title("Choose a wallpaper")
+                .add_filter("Pictures (JPEG, PNG)", &["jpg", "jpeg", "png"]);
+            Ok(Box::new(ui::App::new(store, library, picker)))
         }),
     );
     if let Err(e) = &result {

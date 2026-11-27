@@ -1,4 +1,8 @@
-use crate::{browser::Browser, theme::Theme};
+use crate::{
+    browser::Browser,
+    restore::{Change, Component, RestorePoint},
+    theme::Theme,
+};
 #[cfg(any(windows, test))]
 use crate::{
     config,
@@ -14,6 +18,8 @@ use std::path::{Path, PathBuf};
 /// Preserve the original bytes before replacing either application's existing settings.
 #[cfg(any(windows, test))]
 fn edit_settings(
+    point: &mut RestorePoint,
+    component: Component,
     path: &Path,
     backups: &Path,
     name: &str,
@@ -33,17 +39,22 @@ fn edit_settings(
         read_optional(path)? == original,
         "Settings changed during apply. Retry with the latest file."
     );
-    atomic_write(path, output.as_bytes())
+    point.write(component, path, output.as_bytes())
 }
 
 #[cfg(any(windows, test))]
-fn install_nvim(package: &Path, t: &Theme) -> Result<()> {
+fn install_nvim(point: &mut RestorePoint, package: &Path, t: &Theme) -> Result<()> {
     use std::hash::{DefaultHasher, Hash, Hasher};
     let palette = config::nvim_palette(t);
     let mut hash = DefaultHasher::new();
     palette.hash(&mut hash);
-    atomic_write(&package.join("colors/wte-palette.vim"), palette.as_bytes())?;
-    atomic_write(
+    point.write(
+        Component::Neovim,
+        &package.join("colors/wte-palette.vim"),
+        palette.as_bytes(),
+    )?;
+    point.write(
+        Component::Neovim,
         &package.join("plugin/wte.vim"),
         config::NVIM_PLUGIN.as_bytes(),
     )?;
@@ -52,10 +63,19 @@ fn install_nvim(package: &Path, t: &Theme) -> Result<()> {
     } else {
         &t.vim_scheme
     };
-    atomic_write(
+    point.write(
+        Component::Neovim,
         &package.join("active.txt"),
         format!("{name}\n{:016x}\n", hash.finish()).as_bytes(),
     )
+}
+
+#[cfg(any(windows, test))]
+fn extension_id(mode: crate::theme::Appearance) -> &'static str {
+    match mode {
+        crate::theme::Appearance::Dark => "ginopioloco.exovoid",
+        crate::theme::Appearance::Light => "wte-local.exovoid-light",
+    }
 }
 
 #[cfg(any(windows, test))]
@@ -65,10 +85,7 @@ fn exovoid_registered(extensions: &Path, mode: crate::theme::Appearance) -> Resu
     };
     let entries: Vec<serde_json::Value> =
         serde_json::from_slice(&index).context("Read VS Code’s extension list")?;
-    let id = match mode {
-        crate::theme::Appearance::Dark => "ginopioloco.exovoid",
-        crate::theme::Appearance::Light => "wte-local.exovoid-light",
-    };
+    let id = extension_id(mode);
     for entry in entries {
         if !entry["identifier"]["id"]
             .as_str()
@@ -112,7 +129,6 @@ pub struct Report {
     pub entries: Vec<Entry>,
 }
 impl Report {
-    #[cfg(windows)]
     fn record(&mut self, component: &'static str, result: Result<String>) {
         let (detail, error) = match result {
             Ok(s) => (s, false),
@@ -125,8 +141,8 @@ impl Report {
             path: None,
         });
     }
-    fn browser(&mut self, browser: Browser, root: &Path, theme: &Theme) {
-        let (detail, path) = match browser.export(root, theme) {
+    fn browser(&mut self, point: &mut RestorePoint, browser: Browser, root: &Path, theme: &Theme) {
+        let (detail, path) = match browser.export(point, root, theme) {
             Ok(path) => (browser.instructions().into(), Some(path)),
             Err(error) => (format!("{error:#}"), None),
         };
@@ -158,7 +174,7 @@ mod platform {
         },
     };
 
-    pub fn desktop(root: &Path, t: &Theme) -> Result<String> {
+    pub fn desktop(point: &mut RestorePoint, root: &Path, t: &Theme) -> Result<String> {
         let image = wallpaper::render(&wallpaper::load(&t.wallpaper)?, t.effects);
         let photo = stored_asset(root, "renders", "jpg", &wallpaper::jpeg(&image)?)?;
         let file = stored_asset(
@@ -167,6 +183,19 @@ mod platform {
             "theme",
             &config::desktop_theme(t, photo.to_str().context("Invalid wallpaper filename")?)?,
         )?;
+        if !point
+            .changes
+            .iter()
+            .any(|c| matches!(c, Change::Desktop { .. }))
+        {
+            let theme = crate::desktop::snapshot(root)?;
+            point.remember(Change::Desktop { theme })?;
+        }
+        open_theme(&file)?;
+        Ok("Sent the wallpaper, accent and appearance mode to Windows Personalization.".into())
+    }
+
+    pub fn open_theme(file: &Path) -> Result<()> {
         let path: Vec<u16> = file.as_os_str().encode_wide().chain([0]).collect();
         let verb: Vec<u16> = OsStr::new("open").encode_wide().chain([0]).collect();
         // The shell handler can use COM. Finish the handoff before this worker exits.
@@ -194,10 +223,11 @@ mod platform {
                 return Err(e).context("Open the theme in Windows Personalization");
             }
         }
-        Ok("Sent the wallpaper, accent and appearance mode to Windows Personalization.".into())
+        Ok(())
     }
 
     fn ensure_exovoid(
+        point: &mut RestorePoint,
         root: &Path,
         base: &directories::BaseDirs,
         mode: crate::theme::Appearance,
@@ -227,17 +257,18 @@ mod platform {
             "In VS Code, use ‘Extensions: Install from VSIX…’ with {} and apply the theme again.",
             archive.display()
         );
-        let user_bin = base.data_local_dir().join("Programs/Microsoft VS Code/bin");
-        let system_bin =
-            env::var_os("ProgramFiles").map(|p| PathBuf::from(p).join("Microsoft VS Code/bin"));
-        let path = env::var_os("PATH").unwrap_or_default();
-        let cli = std::iter::once(user_bin)
-            .chain(system_bin)
-            .chain(env::split_paths(&path))
-            .filter(|dir| dir.is_absolute() && dir.join("../Code.exe").is_file())
-            .map(|dir| dir.join("code.cmd"))
-            .find(|file| file.is_file())
-            .with_context(|| format!("Could not find the VS Code CLI. {help}"))?;
+        let cli = code_cli(base).with_context(|| help.clone())?;
+        // Leave previously installed versions under VS Code's extension manager.
+        if extension_present(&extensions, mode)? {
+            anyhow::bail!("The installed extension does not provide the requested base. {help}");
+        }
+        let already_tracked = point
+            .changes
+            .iter()
+            .any(|c| matches!(c, Change::Extension { mode: m } if *m == mode));
+        if !already_tracked {
+            point.remember(Change::Extension { mode })?;
+        }
         // Both arguments are fixed. Let VS Code validate the local package and enforce its policies.
         let result = Command::new(cli)
             .current_dir(folder)
@@ -245,34 +276,92 @@ mod platform {
             .creation_flags(0x08000000)
             .stdin(Stdio::null())
             .output()
-            .context("Start the VS Code extension manager")?;
-        ensure!(
-            result.status.success(),
-            "VS Code could not install ExoVoid. {} {}",
-            String::from_utf8_lossy(&result.stderr).trim(),
-            help
-        );
+            .context("Start the VS Code extension manager")
+            .and_then(|out| {
+                ensure!(
+                    out.status.success(),
+                    "VS Code could not install ExoVoid. {} {}",
+                    String::from_utf8_lossy(&out.stderr).trim(),
+                    help
+                );
+                Ok(())
+            });
+        if result.is_err() && !already_tracked && !extension_present(&extensions, mode)? {
+            point.finish(point.changes.len() - 1)?;
+        }
+        result?;
         Ok(true)
     }
 
-    pub fn vscode(t: &Theme, root: &Path, backups: &Path) -> Result<String> {
+    fn code_cli(base: &directories::BaseDirs) -> Result<PathBuf> {
+        let user_bin = base.data_local_dir().join("Programs/Microsoft VS Code/bin");
+        let system_bin =
+            env::var_os("ProgramFiles").map(|p| PathBuf::from(p).join("Microsoft VS Code/bin"));
+        let path = env::var_os("PATH").unwrap_or_default();
+        std::iter::once(user_bin)
+            .chain(system_bin)
+            .chain(env::split_paths(&path))
+            .filter(|dir| dir.is_absolute() && dir.join("../Code.exe").is_file())
+            .map(|dir| dir.join("code.cmd"))
+            .find(|file| file.is_file())
+            .context("Could not find the VS Code CLI")
+    }
+
+    fn extension_present(dir: &Path, mode: crate::theme::Appearance) -> Result<bool> {
+        let Some(bytes) = read_optional(&dir.join("extensions.json"))? else {
+            return Ok(false);
+        };
+        let entries: Vec<serde_json::Value> = serde_json::from_slice(&bytes)?;
+        Ok(entries.iter().any(|e| {
+            e["identifier"]["id"]
+                .as_str()
+                .is_some_and(|s| s.eq_ignore_ascii_case(extension_id(mode)))
+        }))
+    }
+
+    pub fn remove_extension(mode: crate::theme::Appearance) -> Result<()> {
+        let base = directories::BaseDirs::new().context("Locate VS Code")?;
+        if extension_present(&base.home_dir().join(".vscode/extensions"), mode)? {
+            let status = Command::new(code_cli(&base)?)
+                .args(["--uninstall-extension", extension_id(mode)])
+                .creation_flags(0x08000000)
+                .stdin(Stdio::null())
+                .output()?;
+            ensure!(
+                status.status.success(),
+                "VS Code could not remove {}: {}",
+                extension_id(mode),
+                String::from_utf8_lossy(&status.stderr).trim()
+            );
+        }
+        Ok(())
+    }
+    pub fn vscode(
+        point: &mut RestorePoint,
+        t: &Theme,
+        root: &Path,
+        backups: &Path,
+    ) -> Result<String> {
         let base = directories::BaseDirs::new().context("Find roaming application data")?;
         let user = base.data_dir().join("Code/User");
         if !user.is_dir() {
             return Ok("Skipped. The default VS Code user profile was not found.".into());
         }
+        let path = user.join("settings.json");
         let mut installed = false;
+        // Validate the user's JSONC before installing an extension.
+        if t.code_theme.trim().is_empty() {
+            let current = read_optional(&path)?.unwrap_or_default();
+            config::vscode(std::str::from_utf8(&current)?, t)?;
+            installed = ensure_exovoid(point, root, &base, t.mode)?;
+        }
         edit_settings(
-            &user.join("settings.json"),
+            point,
+            Component::Code,
+            &path,
             backups,
             "vscode-settings.json",
-            |s| {
-                let settings = config::vscode(s, t)?;
-                if t.code_theme.trim().is_empty() {
-                    installed = ensure_exovoid(root, &base, t.mode)?;
-                }
-                Ok(settings)
-            },
+            |s| config::vscode(s, t),
         )?;
         Ok(if installed {
             "Installed the bundled ExoVoid theme and updated the default VS Code profile."
@@ -282,42 +371,28 @@ mod platform {
         .into())
     }
 
-    pub fn nvim(t: &Theme) -> Result<String> {
-        let base = directories::BaseDirs::new().context("Find local application data")?;
-        let app = env::var("NVIM_APPNAME").unwrap_or_else(|_| "nvim".into());
-        ensure!(
-            !app.is_empty()
-                && Path::new(&app)
-                    .components()
-                    .all(|part| matches!(part, std::path::Component::Normal(_))),
-            "Unsupported NVIM_APPNAME"
-        );
-        let config = env::var_os("XDG_CONFIG_HOME")
-            .map(PathBuf::from)
-            .unwrap_or_else(|| base.data_local_dir().to_owned())
-            .join(&app);
-        let data = env::var_os("XDG_DATA_HOME")
-            .map(PathBuf::from)
-            .unwrap_or_else(|| base.data_local_dir().to_owned())
-            .join(format!("{app}-data"));
-        let on_path = env::var_os("PATH").is_some_and(|p| {
-            env::split_paths(&p).any(|d| d.is_absolute() && d.join("nvim.exe").is_file())
-        });
-        if !config.is_dir() && !data.is_dir() && !on_path {
-            return Ok("Skipped. Neovim was not found.".into());
-        }
-        let package = data.join("site/pack/wte/start/wte");
-        let first = !package.join("plugin/wte.vim").exists();
-        install_nvim(&package, t)?;
-        Ok(if first {
-            "Installed the color package. Restart open Neovim sessions once."
-        } else {
-            "Updated the color package. Refocus or restart Neovim."
-        }
-        .into())
+    pub fn nvim(point: &mut RestorePoint, t: &Theme) -> Result<String> {
+        let Some(profile) = crate::nvim::locate()? else {
+            return Ok(
+                "Skipped. No Neovim executable or matching profile in Local or Roaming AppData."
+                    .into(),
+            );
+        };
+        let package = profile.package();
+        install_nvim(point, &package, t)?;
+        point.write(
+            Component::Neovim,
+            &profile.loader(),
+            config::NVIM_CONFIG_LOADER.as_bytes(),
+        )?;
+        Ok(format!(
+            "Installed in {} with the startup hook in {}. Restart Neovim after first install, then refocus to update.",
+            package.display(),
+            profile.config.display()
+        ))
     }
 
-    pub fn glaze(t: &Theme, backups: &Path) -> Result<String> {
+    pub fn glaze(point: &mut RestorePoint, t: &Theme, backups: &Path) -> Result<String> {
         let base = directories::BaseDirs::new().context("Find the user profile")?;
         let path = env::var_os("GLAZEWM_CONFIG_PATH")
             .map(PathBuf::from)
@@ -326,9 +401,23 @@ mod platform {
             return Ok("Skipped. GlazeWM configuration was not found.".into());
         }
         ensure!(path.is_absolute(), "GLAZEWM_CONFIG_PATH must be absolute.");
-        edit_settings(&path, backups, "glazewm-config.yaml", |s| {
-            config::glazewm(s, t)
-        })?;
+        edit_settings(
+            point,
+            Component::Glaze,
+            &path,
+            backups,
+            "glazewm-config.yaml",
+            |s| config::glazewm(s, t),
+        )?;
+        Ok(if reload_glaze() {
+            "Updated and reloaded the window borders."
+        } else {
+            "Saved border colors. Use GlazeWM’s reload-config binding or restart it."
+        }
+        .into())
+    }
+
+    pub fn reload_glaze() -> bool {
         if let Some(p) = env::var_os("ProgramFiles") {
             let cli = PathBuf::from(p).join("glzr.io/GlazeWM/cli/glazewm.exe");
             if cli.is_absolute() && cli.is_file() {
@@ -340,29 +429,32 @@ mod platform {
                     .stderr(Stdio::null())
                     .status();
                 if status.is_ok_and(|s| s.success()) {
-                    return Ok("Updated and reloaded the window borders.".into());
+                    return true;
                 }
             }
         }
-        Ok("Saved border colors. Use GlazeWM’s reload-config binding or restart it.".into())
+        false
     }
 }
 
 #[cfg(windows)]
-fn desktop_components(report: &mut Report, root: &Path, t: &Theme) {
+fn desktop_components(point: &mut RestorePoint, report: &mut Report, root: &Path, t: &Theme) {
     // Files from the same apply share a backup directory. Create it only on the first actual edit.
     let backups = root.join("backups").join(crate::unique_id());
     if t.desktop {
-        report.record("Windows desktop", platform::desktop(root, t));
+        report.record("Windows desktop", platform::desktop(point, root, t));
     }
     if t.vscode {
-        report.record("Visual Studio Code", platform::vscode(t, root, &backups));
+        report.record(
+            "Visual Studio Code",
+            platform::vscode(point, t, root, &backups),
+        );
     }
     if t.nvim {
-        report.record("Neovim", platform::nvim(t));
+        report.record("Neovim", platform::nvim(point, t));
     }
     if t.glaze {
-        report.record("GlazeWM", platform::glaze(t, &backups));
+        report.record("GlazeWM", platform::glaze(point, t, &backups));
     }
     if backups.is_dir() {
         report.record(
@@ -372,11 +464,32 @@ fn desktop_components(report: &mut Report, root: &Path, t: &Theme) {
     }
 }
 
+fn restore_point(root: &Path) -> Result<RestorePoint> {
+    let point = RestorePoint::load(root)?;
+    #[cfg(windows)]
+    {
+        let base = directories::BaseDirs::new().context("Locate application settings")?;
+        let mut point = point;
+        let glaze = std::env::var_os("GLAZEWM_CONFIG_PATH")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| base.home_dir().join(".glzr/glazewm/config.yaml"));
+        point.import_older_backups(
+            root,
+            &base.data_dir().join("Code/User/settings.json"),
+            &glaze,
+        )?;
+        Ok(point)
+    }
+    #[cfg(not(windows))]
+    Ok(point)
+}
+
 pub fn run(root: &Path, t: &Theme) -> Result<Report> {
     t.validate()?;
+    let mut point = restore_point(root)?;
     let mut report = Report::default();
     #[cfg(windows)]
-    desktop_components(&mut report, root, t);
+    desktop_components(&mut point, &mut report, root, t);
     #[cfg(not(windows))]
     if t.desktop || t.vscode || t.nvim || t.glaze {
         report.entries.push(Entry {
@@ -387,10 +500,105 @@ pub fn run(root: &Path, t: &Theme) -> Result<Report> {
         });
     }
     if t.chrome {
-        report.browser(Browser::Chrome, root, t);
+        report.browser(&mut point, Browser::Chrome, root, t);
     }
     if t.firefox {
-        report.browser(Browser::Firefox, root, t);
+        report.browser(&mut point, Browser::Firefox, root, t);
+    }
+    Ok(report)
+}
+
+pub fn restore(root: &Path) -> Result<Report> {
+    let mut point = restore_point(root)?;
+    let mut report = Report::default();
+    if point.changes.is_empty() {
+        report.record(
+            "Restore",
+            Ok(
+                "No saved changes to restore. The next theme you apply starts a new restore point."
+                    .into(),
+            ),
+        );
+        return Ok(report);
+    }
+    let backups = root
+        .join("backups")
+        .join(format!("restore-{}", crate::unique_id()));
+    let mut restored = Vec::new();
+    for i in (0..point.changes.len()).rev() {
+        let change = &point.changes[i];
+        let component = change.component();
+        let result = match change {
+            Change::Directory { path, .. } if point.changes[i+1..].iter().any(|c|
+                matches!(c, Change::File { path: child, .. } | Change::Directory { path: child, .. } if child.starts_with(path))) => continue,
+            Change::Directory { path, .. } => match std::fs::remove_dir(path) {
+                Err(e)
+                    if matches!(
+                        e.kind(),
+                        std::io::ErrorKind::NotFound | std::io::ErrorKind::DirectoryNotEmpty
+                    ) =>
+                {
+                    Ok(())
+                }
+                result => result.map_err(Into::into),
+            },
+            Change::File { path, original, .. } => {
+                crate::restore::restore_file(path, original.as_deref(), &backups, i)
+                    .map_err(|e| anyhow::anyhow!("{}: {e:#}", path.display()))
+            }
+            #[cfg(windows)]
+            Change::Desktop { theme } => crate::desktop::restore(theme, platform::open_theme),
+            #[cfg(windows)]
+            Change::Extension { mode } => platform::remove_extension(*mode),
+            #[cfg(not(windows))]
+            _ => Err(anyhow::anyhow!("Restore this component on Windows.")),
+        };
+        match result {
+            Ok(()) => {
+                point.finish(i)?;
+                if !restored.contains(&component) {
+                    restored.push(component);
+                }
+            }
+            Err(e) => report.record(component.name(), Err(e)),
+        }
+    }
+    for component in restored {
+        if report
+            .entries
+            .iter()
+            .any(|e| e.error && e.component == component.name())
+        {
+            continue;
+        }
+        let detail = match component {
+            Component::Desktop => "Sent the previous theme to Windows Personalization.",
+            Component::Code => "Restored your previous VS Code setup. Reload the editor window.",
+            Component::Neovim => {
+                "Restored the previous files. Restart Neovim to load your original configuration."
+            }
+            #[cfg(windows)]
+            Component::Glaze if platform::reload_glaze() => {
+                "Restored the configuration and reloaded GlazeWM."
+            }
+            Component::Glaze => "Restored the original configuration. Reload GlazeWM.",
+            Component::Chrome => {
+                "Restored the export files. If you loaded a WTE theme, select your previous theme in Chrome’s Appearance settings."
+            }
+            Component::Firefox => {
+                "Restored the export files. If you enabled a WTE theme, reselect your previous theme in Firefox’s Add-ons Manager."
+            }
+        };
+        report.record(component.name(), Ok(detail.into()));
+    }
+    if backups.exists() {
+        report.record(
+            "Before restore",
+            Ok(format!(
+                "Replaced files were backed up in {}",
+                backups.display()
+            )),
+        );
     }
     Ok(report)
 }
@@ -410,7 +618,14 @@ mod tests {
         fs::write(&path, original)?;
         for photo in Photo::ALL {
             let theme = Theme::preset(photo);
-            edit_settings(&path, &backup, "vscode.json", |s| config::vscode(s, &theme))?;
+            edit_settings(
+                &mut RestorePoint::load(dir.path())?,
+                Component::Code,
+                &path,
+                &backup,
+                "vscode.json",
+                |s| config::vscode(s, &theme),
+            )?;
             let result = fs::read_to_string(&path)?;
             assert!(result.starts_with('\u{feff}') && result.contains("// Font preference"));
             assert!(result.contains("\"editor.fontSize\": 18") && result.contains("#abcdef"));
@@ -581,7 +796,15 @@ mod tests {
         ] {
             fs::write(&path, text)?;
             assert!(
-                edit_settings(&path, dir.path(), "backup", |s| config::vscode(s, &theme)).is_err()
+                edit_settings(
+                    &mut RestorePoint::load(dir.path())?,
+                    Component::Code,
+                    &path,
+                    dir.path(),
+                    "backup",
+                    |s| config::vscode(s, &theme)
+                )
+                .is_err()
             );
             assert_eq!(fs::read_to_string(&path)?, text);
             assert!(!dir.path().join("backup").exists());
@@ -620,14 +843,14 @@ mod tests {
         let dir = tempfile::tempdir()?;
         let mut theme = Theme::preset(Photo::BlueHour);
         let package = dir.path().join("site/pack/wte/start/wte");
-        install_nvim(&package, &theme)?;
+        install_nvim(&mut RestorePoint::load(dir.path())?, &package, &theme)?;
         assert!(
             fs::read_to_string(package.join("colors/wte-palette.vim"))?.contains("guibg=#111B32")
         );
         assert!(fs::read_to_string(package.join("active.txt"))?.starts_with("wte-palette\n"));
         theme.vim_scheme = "habamax".into();
         theme.code_theme = "Custom Dark".into();
-        install_nvim(&package, &theme)?;
+        install_nvim(&mut RestorePoint::load(dir.path())?, &package, &theme)?;
         assert!(fs::read_to_string(package.join("active.txt"))?.starts_with("habamax\n"));
         let settings: serde_json::Value = serde_json::from_str(&config::vscode("{}", &theme)?)?;
         assert_eq!(
@@ -653,7 +876,7 @@ mod tests {
                 .collect::<Vec<_>>(),
         )?;
         assert!(ini.contains(&format!("Wallpaper={path}\r\n")));
-        assert!(ini.contains("ColorizationColor=0xFFDE9569\r\n"));
+        assert!(ini.contains("ColorizationColor=0xFF85593F\r\n"));
         assert!(ini.contains("MTSM=DABJDKT"));
         Ok(())
     }
@@ -696,12 +919,66 @@ mod nvim_smoke {
     use super::*;
     #[test]
     #[ignore = "requires nvim on PATH"]
+    fn reported_profile_loads_with_a_reset_packpath_and_restores() -> Result<()> {
+        use std::{fs, process::Command};
+        let dir = tempfile::tempdir()?;
+        let base = dir.path().join("profiles with spaces");
+        let nvim = || {
+            let mut cmd = Command::new("nvim");
+            cmd.env("NVIM_APPNAME", "studio")
+                .env("XDG_DATA_HOME", base.join("data"))
+                .env("XDG_CONFIG_HOME", base.join("config"))
+                .env("XDG_STATE_HOME", base.join("state"))
+                .env("XDG_CACHE_HOME", base.join("cache"));
+            cmd
+        };
+        let profile = crate::nvim::query(nvim())?;
+        assert_eq!(profile.config, base.join("config/studio"));
+        let mut point = RestorePoint::load(dir.path())?;
+        let theme = Theme::preset(crate::theme::Photo::Sienna);
+        fs::create_dir_all(&profile.config)?;
+        let init = profile.config.join("init.vim");
+        let init_text = "let &packpath = $VIMRUNTIME\ncolorscheme habamax\n";
+        fs::write(&init, init_text)?;
+        install_nvim(&mut point, &profile.package(), &theme)?;
+        point.write(
+            Component::Neovim,
+            &profile.loader(),
+            config::NVIM_CONFIG_LOADER.as_bytes(),
+        )?;
+        let verify = |scheme: &str| -> Result<()> {
+            let path = dir.path().join("loaded-scheme");
+            let output = nvim().args(["--headless", "-n", "-i", "NONE", "-c",
+                "autocmd VimEnter * call timer_start(0, { _ -> execute(\"call writefile([get(g:, 'colors_name', '')], $WTE_RESULT) | qall!\") })"])
+                .env("WTE_RESULT", &path).output()?;
+            ensure!(
+                output.status.success(),
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            assert_eq!(fs::read_to_string(&path)?.trim(), scheme);
+            Ok(())
+        };
+        verify("wte-palette")?;
+        let report = restore(dir.path())?;
+        assert!(report.entries.iter().all(|e| !e.error));
+        assert_eq!(fs::read_to_string(init)?, init_text);
+        verify("habamax")?;
+        Ok(())
+    }
+
+    #[test]
+    #[ignore = "requires nvim on PATH"]
     fn neovim_loads_package_at_start_and_refreshes_on_focus() -> Result<()> {
         use std::{fs, process::Command};
         let dir = tempfile::tempdir()?;
         let site = dir.path().join("site");
         let package = site.join("pack/wte/start/wte");
-        install_nvim(&package, &Theme::preset(crate::theme::Photo::Canopy))?;
+        install_nvim(
+            &mut RestorePoint::load(dir.path())?,
+            &package,
+            &Theme::preset(crate::theme::Photo::Canopy),
+        )?;
         let init = dir.path().join("init.vim");
         fs::write(
             &init,

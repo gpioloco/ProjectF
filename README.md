@@ -2,13 +2,13 @@
 
 WTE is a portable Rust app for Windows 11. Apply one palette across your wallpaper, Windows appearance, VS Code, Neovim and GlazeWM borders. Export matching Chrome and Firefox themes. Start from one of three bundled presets or let WTE pick an accent and build a theme from a photograph. VS Code and Neovim share ExoVoid syntax colors in both modes, with darker ink for light backgrounds.
 
-[Run the portable app](#run-the-portable-app) · [Build from source](#build-from-source) · [Apply a preset](#apply-a-preset) · [Create a custom theme](#create-a-custom-theme) · [Browser setup](#load-a-browser-theme) · [Screenshots](#screenshot-gallery)
+[Run the portable app](#run-the-portable-app) · [Build from source](#build-from-source) · [Apply a preset](#apply-a-preset) · [Restore previous settings](#restore-previous-settings) · [Create a custom theme](#create-a-custom-theme) · [Browser setup](#load-a-browser-theme) · [Screenshots](#screenshot-gallery)
 
 ![WTE’s theme library with the Canopy forest wallpaper selected and the Sienna and Blue Hour presets beside it](docs/screenshots/theme-library.png)
 
 ## Run the portable app
 
-Extract `WTE-0.3.0-windows-x64.zip` and double-click `wte.exe`. WTE opens in **Library**. Choose **App · Light** or **App · Dark** in the top bar to change the WTE window immediately. It remembers this preference when you reopen it. Each integration is optional. The apply results identify any enabled integration WTE could not find.
+Extract `WTE-0.4.0-windows-x64.zip` and double-click `wte.exe`. WTE opens in **Library**. Choose **App · Light** or **App · Dark** in the top bar to change the WTE window immediately. It remembers this preference when you reopen it. Each integration is optional. The apply results identify any enabled integration WTE could not find.
 
 ## Build from source
 
@@ -52,9 +52,9 @@ Run `cargo test --locked` from the repository root. With `nvim` on `PATH`, `carg
 
 ## Create a custom theme
 
-1. In **Library**, choose **Theme from wallpaper…** and pick a local JPEG or PNG up to 40 megapixels. WTE opens an editable draft named after the file. It samples visible pixels locally, groups similar hues, and selects a prominent accent and a supporting color. Grayscale photos produce neutral palettes. WTE adjusts the extracted colors for contrast against the selected surfaces.
+1. In **Library**, choose **Theme from wallpaper…** and pick a local JPEG or PNG up to 40 megapixels. The native Windows file picker accepts a selection or **Cancel**. WTE reads the image in the background and opens an editable draft named after the file. It samples visible pixels locally, groups similar hues, and selects a prominent accent and a supporting color. Grayscale photos produce neutral palettes. WTE adjusts the extracted colors for contrast against the selected surfaces.
 2. To start from a preset instead, select its card and choose **New theme**. In the editor, **Choose local image…** replaces the wallpaper. **Use wallpaper colors** regenerates the six swatches from the selected image, including bundled wallpapers. You can tweak each swatch and rename the draft before saving.
-3. In **Color palette → Theme mode**, choose **Light** or **Dark** for this theme. Switching back restores the swatches you edited in that mode. **Use wallpaper colors** rebuilds both palettes from the photo. Themes saved before version 0.3 open in dark mode with their original swatches.
+3. In **Color palette → Theme mode**, choose **Light** or **Dark** for this theme. Switching back restores the swatches you edited in that mode. **Use wallpaper colors** rebuilds both palettes from the photo. Dark themes use deeper accent and secondary swatches. WTE updates these two swatches in older dark palettes on upgrade. You can still edit their colors by hand.
 4. Adjust **Blur**, **Raindrops** and **Film grain** while watching the preview. The *Alpine Rain* example uses the Blue Hour photograph with blur at **8%**, raindrops at **74%** and film grain at **6%**. The effects render into a still wallpaper, so you can close WTE after applying it.
 5. **Accent** supplies the Windows accent and focused GlazeWM border. **Surface** supplies the unfocused border. Clear **Use palette** beside either border to choose its color independently.
 6. Under **Components**, select the applications to update. Leave the editor theme fields blank for ExoVoid syntax with wallpaper-based backgrounds, highlights and borders. Enter an installed VS Code theme or Neovim colorscheme name to use that editor's own theme.
@@ -71,7 +71,7 @@ Choose **Save theme** to copy the imported wallpaper to the local library and re
 | --- | --- |
 | Windows desktop | WTE opens a local `.theme` file through the registered Windows shell handler. The file specifies a fill-mode wallpaper, an explicit accent color, and the light or dark appearance for Windows and apps. Personalization and organizational policy control the final desktop appearance. [Microsoft theme file format](https://learn.microsoft.com/en-us/windows/win32/controls/themesfileformat-overview) |
 | VS Code | WTE edits the default stable profile at `%APPDATA%\Code\User\settings.json`. Dark themes use **ExoVoid Classic Syntax - Dark Soft Blue**. Light themes use **WTE ExoVoid Light**, which keeps the same TextMate scopes, semantic token rules and font styles, and darkens the foreground colors. WTE scopes the palette overrides to the selected base. WTE preserves comments, unrelated settings and other theme scopes. Named profiles, workspace settings and automatic theme selection can take precedence. [VS Code theme settings](https://code.visualstudio.com/docs/configure/themes) |
-| Neovim | WTE writes a colorscheme, selection file and Vimscript loader under `stdpath('data')/site/pack/wte/start/wte`. Classic highlights, Tree-sitter captures and LSP token groups use colors from the same ExoVoid theme. After the initial restart, changes load on startup or when the frontend delivers `FocusGained`. [Neovim packages](https://neovim.io/doc/user/pack/) |
+| Neovim | WTE asks the installed Neovim for its config and data directories. If the executable is missing, it looks for an existing profile in Local and Roaming AppData, including `NVIM_APPNAME` and XDG overrides. It writes the colorscheme and its loader under `stdpath('data')/site/pack/wte/start/wte` and adds `after/plugin/wte-theme-engine.lua` under `stdpath('config')` for plugin managers such as lazy.nvim. Classic highlights, Tree-sitter captures and LSP token groups use colors from the same ExoVoid theme. After the initial restart, changes load on startup or when the frontend delivers `FocusGained`. [Neovim packages](https://neovim.io/doc/user/pack/) |
 | GlazeWM v3 | WTE updates the enabled flag and color for focused and unfocused borders in `%USERPROFILE%\.glzr\glazewm\config.yaml` or the absolute path in `GLAZEWM_CONFIG_PATH`. It requests a reload through the CLI for a standard Program Files installation. Border effects require Windows 11. [GlazeWM configuration](https://github.com/glzr-io/glazewm#config-window-effects) |
 | Chrome | Exports a Manifest V3 theme folder with colors for the frame, toolbar, tabs, address bar and new tab page. [Chrome theme format](https://developer.chrome.com/docs/extensions/develop/ui/themes) |
 | Firefox | Exports a static WebExtension theme as a single XPI with colors for the frame, toolbar, tabs, address bar and new tab page. It declares the theme’s light or dark color scheme. [Firefox theme format](https://developer.mozilla.org/en-US/docs/Mozilla/Add-ons/WebExtensions/manifest.json/theme) |
@@ -89,14 +89,20 @@ To add a browser to a preset, choose **Edit theme** to make a custom copy. In th
 
 WTE keeps each theme’s exports under `%LOCALAPPDATA%\WTE\browsers\wte-<theme-id>\`. After changing a theme, apply it in WTE and load its updated export in the browser. Each browser controls activation. Chrome uses its own appearance setting for internal pages such as Settings. The exports contain a color manifest and request no permissions.
 
-## Backups and recovery
+## Restore previous settings
 
-WTE stores its library, imported photos, rendered wallpapers and desktop themes in `%LOCALAPPDATA%\WTE`. Before changing an existing VS Code or GlazeWM configuration, it saves the original bytes in `backups\<apply-id>\` under that folder. **Apply results** shows the backup path. WTE replaces each file atomically and reports each integration independently.
+Choose **Library → Restore → Restore settings**. WTE remembers each component immediately before its first change and keeps that restore point across theme switches and app restarts. After a successful restore, the next apply starts a new restore point. Your WTE theme library and imported pictures stay available.
 
-- **Windows** — Select your previous theme in Windows Personalization before deleting any WTE wallpaper files.
-- **VS Code and GlazeWM** — Restore the relevant `vscode-settings.json` or `glazewm-config.yaml` backup to its original configuration path, then reload the application. If you edited the file after applying the theme, merge the settings you want to keep.
-- **Browsers** — Restore the default theme in Chrome’s Appearance settings, or enable a different theme in Firefox’s Add-ons Manager.
-- **Neovim** — Remove `site/pack/wte/start/wte` under `stdpath('data')` and restart Neovim. Run `:echo stdpath('data')` in Neovim to locate that directory.
+| Component | What to expect after Restore |
+| --- | --- |
+| Windows desktop | WTE opens a saved copy of your previous desktop theme, through Windows Personalization. It restores the wallpaper, accent and appearance mode, and reapplies separately assigned monitor wallpapers. |
+| VS Code and GlazeWM | WTE restores the original config files byte for byte and removes a settings file it created. It asks VS Code to uninstall any theme extension it installed. Reload the editor window. WTE requests a GlazeWM reload when the CLI is available. |
+| Neovim | WTE restores existing files and removes the package files and startup hook it added. Restart Neovim. To check the detected profile, compare the paths in **Apply results** with `:echo stdpath('config')` and `:echo stdpath('data')`. |
+| Chrome and Firefox | WTE restores the exported files. If you activated a theme in the browser, reselect your previous theme in Chrome’s **Appearance** settings or Firefox’s **Add-ons and themes**. |
+
+WTE stores its restore point under `%LOCALAPPDATA%\WTE`. If you edited a file after applying a theme, Restore saves its current contents under `backups\restore-<id>\` before replacing it. **Restore results** lists the backup location and any component that needs another attempt. You can run Restore again after resolving an error.
+
+Full restore points begin with version 0.4. WTE can also recover the earliest available VS Code backup from an older release and a GlazeWM backup when its other settings match the current profile. Earlier releases did not capture the original desktop or Neovim state.
 
 WTE runs with the current user’s privileges. It works offline without a service, scheduled task, startup entry, direct registry edits or editor extension downloads. The portable build is unsigned. An organization’s application-control policy may require an approved or signed build. The repository includes the Rust source, dependency lockfile and Windows privilege manifest for review.
 

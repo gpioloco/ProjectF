@@ -1,7 +1,7 @@
 //! Local static themes. Each browser owns installation and activation.
 use crate::{
     palette::readable,
-    store::atomic_write,
+    restore::{Component, RestorePoint},
     theme::{Theme, hex},
 };
 use anyhow::{Result, ensure};
@@ -37,6 +37,11 @@ impl Browser {
         let frame_text = readable(p.muted, p.background);
         let tab_text = readable(p.text, p.surface);
         let field_text = readable(p.text, p.background);
+        let icon = if t.mode == crate::theme::Appearance::Dark {
+            crate::palette::with_contrast(p.accent, p.surface, 3.0)
+        } else {
+            readable(p.accent, p.surface)
+        };
         let name = format!("WTE · {}", t.name);
         match self {
             Self::Chrome => json!({
@@ -44,7 +49,7 @@ impl Browser {
                 "theme": { "colors": {
                     "frame": p.background, "frame_inactive": p.surface,
                     "toolbar": p.surface, "tab_text": tab_text, "tab_background_text": frame_text,
-                    "toolbar_button_icon": readable(p.accent, p.surface), "bookmark_text": tab_text,
+                    "toolbar_button_icon": icon, "bookmark_text": tab_text,
                     "omnibox_background": p.background, "omnibox_text": field_text,
                     "ntp_background": p.background, "ntp_text": field_text,
                     "ntp_link": readable(p.secondary, p.background)
@@ -64,7 +69,7 @@ impl Browser {
                         "tab_text": hex(tab_text), "tab_line": hex(p.accent),
                         "toolbar": hex(p.surface), "toolbar_text": hex(tab_text),
                         "toolbar_field": hex(p.background), "toolbar_field_text": hex(field_text),
-                        "icons": hex(readable(p.accent, p.surface)), "icons_attention": hex(p.secondary),
+                        "icons": hex(icon), "icons_attention": hex(p.secondary),
                         "popup": hex(p.surface), "popup_text": hex(tab_text),
                         "ntp_background": hex(p.background), "ntp_text": hex(field_text)
                     }
@@ -73,7 +78,7 @@ impl Browser {
         }
     }
 
-    pub fn export(self, root: &Path, theme: &Theme) -> Result<PathBuf> {
+    pub fn export(self, point: &mut RestorePoint, root: &Path, theme: &Theme) -> Result<PathBuf> {
         ensure!(
             !theme.id.is_empty()
                 && theme.id.len() <= 60
@@ -88,12 +93,16 @@ impl Browser {
         match self {
             Self::Chrome => {
                 let folder = directory.join("chrome");
-                atomic_write(&folder.join("manifest.json"), &json)?;
+                point.write(Component::Chrome, &folder.join("manifest.json"), &json)?;
                 Ok(folder)
             }
             Self::Firefox => {
                 let path = directory.join("firefox.xpi");
-                atomic_write(&path, &crate::archive(&[("manifest.json", &json)])?)?;
+                point.write(
+                    Component::Firefox,
+                    &path,
+                    &crate::archive(&[("manifest.json", &json)])?,
+                )?;
                 Ok(path)
             }
         }
@@ -160,7 +169,11 @@ mod tests {
         drop(zip);
         assert_eq!(apply::run(tmp.path(), &t)?.entries[0].component, "Firefox");
         t.id = "../escape".into();
-        assert!(Browser::Firefox.export(tmp.path(), &t).is_err());
+        assert!(
+            Browser::Firefox
+                .export(&mut RestorePoint::load(tmp.path())?, tmp.path(), &t)
+                .is_err()
+        );
         Ok(())
     }
 }

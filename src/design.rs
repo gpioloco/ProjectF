@@ -87,7 +87,7 @@ pub fn appearance(ctx: &Context, mode: Appearance) {
     v.extreme_bg_color = v.panel_fill;
     v.override_text_color = Some(tone(INK, [231, 238, 229]));
     v.weak_text_color = Some(tone(MUTED, [173, 191, 177]));
-    v.hyperlink_color = tone(GREEN, [180, 214, 163]);
+    v.hyperlink_color = tone(GREEN, [139, 168, 130]);
     v.error_fg_color = tone(Color32::from_rgb(153, 49, 39), [255, 159, 147]);
     v.selection.bg_fill = GREEN;
     v.selection.stroke = Stroke::new(1.0_f32, WHITE);

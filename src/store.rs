@@ -12,6 +12,8 @@ use tempfile::NamedTempFile;
 #[derive(Clone, Serialize, Deserialize)]
 pub struct Library {
     pub themes: Vec<Theme>,
+    #[serde(default)]
+    dark_accents_updated: bool,
     #[serde(default = "default_app_mode")]
     pub app_mode: Appearance,
 }
@@ -23,6 +25,7 @@ impl Default for Library {
     fn default() -> Self {
         Self {
             themes: Vec::new(),
+            dark_accents_updated: true,
             app_mode: default_app_mode(),
         }
     }
@@ -52,7 +55,8 @@ impl Store {
         let Some(data) = read_optional(&self.root.join("library.json"))? else {
             return Ok(Library::default());
         };
-        let library: Library = serde_json::from_slice(&data).context("Read saved theme library")?;
+        let mut library: Library =
+            serde_json::from_slice(&data).context("Read saved theme library")?;
         let mut ids = HashSet::new();
         for theme in &library.themes {
             theme.validate()?;
@@ -60,6 +64,12 @@ impl Store {
                 theme.id.starts_with("custom-") && ids.insert(&theme.id),
                 "Invalid custom theme identifier."
             );
+        }
+        if !library.dark_accents_updated {
+            for theme in &mut library.themes {
+                theme.soften_dark_accents();
+            }
+            library.dark_accents_updated = true;
         }
         Ok(library)
     }
@@ -76,6 +86,42 @@ pub fn read_optional(path: &Path) -> Result<Option<Vec<u8>>> {
         Ok(v) => Ok(Some(v)),
         Err(e) if e.kind() == ErrorKind::NotFound => Ok(None),
         Err(e) => Err(e).with_context(|| format!("Read {}", path.display())),
+    }
+}
+
+#[cfg(test)]
+mod migration_tests {
+    use super::*;
+    use crate::theme::Photo;
+
+    #[test]
+    fn darkens_legacy_accents_once_and_preserves_the_light_palette() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        let store = Store {
+            root: dir.path().into(),
+            _lock: fs::File::create(dir.path().join("library.lock"))?,
+        };
+        let mut old = Theme::preset(Photo::BlueHour);
+        old.id = "custom-blue".into();
+        old.palette.accent = [144, 182, 246];
+        old.palette.secondary = [187, 181, 228];
+        let light = old.palette.variant(Appearance::Light);
+        let mut old = serde_json::to_value(old)?;
+        old.as_object_mut().unwrap().remove("alternate_palette");
+        fs::write(
+            dir.path().join("library.json"),
+            serde_json::to_vec(&serde_json::json!({"themes": [old]}))?,
+        )?;
+        let mut library = store.load()?;
+        let theme = &mut library.themes[0];
+        assert_eq!(theme.palette, Theme::preset(Photo::BlueHour).palette);
+        theme.set_mode(Appearance::Light);
+        assert_eq!(theme.palette, light);
+        theme.set_mode(Appearance::Dark);
+        theme.palette.accent = [230, 120, 191];
+        store.save(&library)?;
+        assert_eq!(store.load()?.themes[0].palette.accent, [230, 120, 191]);
+        Ok(())
     }
 }
 
@@ -185,7 +231,7 @@ mod tests {
         )?;
         let mut library = store.load()?;
         assert_eq!(library.app_mode, Appearance::Light);
-        assert_eq!(library.themes[0], original);
+        assert_eq!(library.themes[0].palette, original.palette);
         library.app_mode = Appearance::Dark;
         let theme = &mut library.themes[0];
         theme.set_mode(Appearance::Light);

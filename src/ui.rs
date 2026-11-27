@@ -109,7 +109,16 @@ struct Draft {
     theme: Theme,
     original: Theme,
 }
+enum PickFor {
+    NewTheme,
+    Draft(String),
+}
+type PickResult = Result<Option<(PathBuf, PhotoSample)>>;
+
 pub struct App {
+    picker: rfd::FileDialog,
+    confirm_restore: bool,
+    pending_photo: Option<(PickFor, Receiver<PickResult>)>,
     store: Store,
     library: Library,
     selected: String,
@@ -125,8 +134,11 @@ pub struct App {
 }
 
 impl App {
-    pub fn new(store: Store, library: Library) -> Self {
+    pub fn new(store: Store, library: Library, picker: rfd::FileDialog) -> Self {
         Self {
+            picker,
+            pending_photo: None,
+            confirm_restore: false,
             store,
             library,
             selected: "canopy".into(),
@@ -167,12 +179,68 @@ impl App {
         self.request_edit(theme);
     }
 
-    fn theme_from_wallpaper(&mut self, path: PathBuf) {
-        let source = Wallpaper::Local(path.clone());
-        self.photos.invalidate(&source);
-        match self.photos.palette(&source) {
-            Ok(palette) => self.request_edit(Theme::from_wallpaper(&path, palette)),
-            Err(detail) => self.message = Some(("Could not create theme".into(), detail)),
+    fn choose_wallpaper(&mut self, ctx: &eframe::egui::Context, target: PickFor) {
+        if self.pending_photo.is_some() {
+            return;
+        }
+        let dialog = self.picker.clone();
+        let ctx = ctx.clone();
+        let (tx, rx) = mpsc::channel();
+        self.pending_photo = Some((target, rx));
+        std::thread::spawn(move || {
+            // On Windows rfd initializes this worker as a COM STA. The window's
+            // thread continues pumping messages for the owned Explorer dialog.
+            let result = dialog
+                .pick_file()
+                .map(|path| {
+                    let sample = PhotoSample::load(&Wallpaper::Local(path.clone()))?;
+                    Ok((path, sample))
+                })
+                .transpose();
+            let _ = tx.send(result);
+            ctx.request_repaint();
+        });
+    }
+
+    fn finish_photo(&mut self) {
+        let Some((_, rx)) = &self.pending_photo else {
+            return;
+        };
+        let result = match rx.try_recv() {
+            Ok(result) => result,
+            Err(mpsc::TryRecvError::Empty) => return,
+            Err(mpsc::TryRecvError::Disconnected) => {
+                Err(anyhow::anyhow!("Wallpaper selection was interrupted."))
+            }
+        };
+        let (target, _) = self.pending_photo.take().unwrap();
+        match result {
+            Ok(Some((path, sample))) => {
+                let source = Wallpaper::Local(path.clone());
+                let palette = sample.palette.clone();
+                self.photos.invalidate(&source);
+                self.photos.bases.insert(source.clone(), Ok(sample));
+                match target {
+                    PickFor::NewTheme => match palette {
+                        Some(palette) => self.request_edit(Theme::from_wallpaper(&path, palette)),
+                        None => {
+                            self.message = Some((
+                                "Could not create theme".into(),
+                                "Choose a wallpaper with visible pixels.".into(),
+                            ))
+                        }
+                    },
+                    PickFor::Draft(id) => {
+                        if let Some(draft) = &mut self.draft
+                            && draft.theme.id == id
+                        {
+                            draft.theme.wallpaper = source;
+                        }
+                    }
+                }
+            }
+            Ok(None) => {}
+            Err(e) => self.message = Some(("Could not open wallpaper".into(), format!("{e:#}"))),
         }
     }
 
@@ -222,16 +290,21 @@ impl App {
         self.filter = Filter::All;
         Ok(())
     }
-    fn apply(&mut self, ctx: &eframe::egui::Context, t: Theme) {
+    fn start_job(
+        &mut self,
+        ctx: &eframe::egui::Context,
+        title: String,
+        action: impl FnOnce(&std::path::Path) -> Result<apply::Report> + Send + 'static,
+    ) {
         if self.job.is_some() {
             return;
         }
         let root = self.store.root.clone();
         let (tx, rx) = mpsc::channel();
-        self.job = Some((t.name.clone(), rx));
+        self.job = Some((title, rx));
         let ctx = ctx.clone();
         std::thread::spawn(move || {
-            let _ = tx.send(apply::run(&root, &t));
+            let _ = tx.send(action(&root));
             ctx.request_repaint();
         });
     }
@@ -320,11 +393,17 @@ impl App {
         ui.horizontal(|ui| {
             ui.label(title("Theme library", 37.0));
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                if button(ui, "Theme from wallpaper…", false).clicked()
-                    && let Some(path) = pick_wallpaper()
-                {
-                    self.theme_from_wallpaper(path);
+                if button(ui, "Theme from wallpaper…", false).clicked() {
+                    self.choose_wallpaper(ui.ctx(), PickFor::NewTheme);
                 }
+                ui.add_enabled_ui(self.job.is_none(), |ui| {
+                    if button(ui, "Restore", false)
+                        .on_hover_text("Restore settings from before WTE applied a theme")
+                        .clicked()
+                    {
+                        self.confirm_restore = true;
+                    }
+                });
             });
         });
         ui.add_space(11.0);
@@ -369,7 +448,11 @@ impl App {
             ))
             .monospace()
             .size(11.5)
-            .color(LIME),
+            .color(if ui.visuals().dark_mode {
+                ui.visuals().hyperlink_color
+            } else {
+                LIME
+            }),
         );
         info.add(
             Label::new(
@@ -410,16 +493,20 @@ impl App {
                 .layout(Layout::left_to_right(Align::Center)),
         );
         let label = if self.job.is_some() {
-            "Applying…"
+            "Working…"
         } else {
             "Apply theme"
         };
         let apply = actions.add_enabled(
             self.job.is_none(),
-            Button::new(RichText::new(label).font(strong(15.0)).color(INK))
-                .fill(LIME)
-                .min_size(vec2(105.0, 35.0))
-                .corner_radius(5),
+            Button::new(
+                RichText::new(label)
+                    .font(strong(15.0))
+                    .color(if ui.visuals().dark_mode { WHITE } else { INK }),
+            )
+            .fill(if ui.visuals().dark_mode { GREEN } else { LIME })
+            .min_size(vec2(105.0, 35.0))
+            .corner_radius(5),
         );
         let apply = if selected.vscode && selected.code_theme.trim().is_empty() {
             apply.on_hover_text(format!(
@@ -430,7 +517,12 @@ impl App {
             apply
         };
         if apply.clicked() {
-            self.apply(ui.ctx(), selected.clone());
+            let t = selected.clone();
+            self.start_job(
+                ui.ctx(),
+                format!("Apply results · {}", t.name),
+                move |root| apply::run(root, &t),
+            );
         }
         if actions
             .add(
@@ -681,14 +773,8 @@ impl App {
                 ComboBox::from_id_salt("wallpicker").selected_text(selected).width((ui.available_width()-10.0).max(80.0)).show_ui(ui,|ui|{
                     for p in Photo::ALL {ui.selectable_value(&mut t.wallpaper,Wallpaper::Bundled(p),p.title());}
                 });
-                if button(ui,"Choose local image…",false).clicked()
-                    && let Some(path)=pick_wallpaper() {
-                    let source=Wallpaper::Local(path);
-                    self.photos.invalidate(&source);
-                    match self.photos.sample(&source) {
-                        Ok(_)=>t.wallpaper=source,
-                        Err(detail)=>self.message=Some(("Could not open wallpaper".into(),detail)),
-                    }
+                if button(ui,"Choose local image…",false).clicked() {
+                    self.choose_wallpaper(ui.ctx(), PickFor::Draft(t.id.clone()));
                 }
             });
             section(left,"Wallpaper effects",|ui|{
@@ -759,18 +845,36 @@ impl App {
                     self.job = None;
                 }
                 Ok(Err(e)) => {
-                    self.message = Some(("Theme application".into(), format!("{e:#}")));
+                    self.message = Some((name.clone(), format!("{e:#}")));
                     self.job = None;
                 }
                 Err(mpsc::TryRecvError::Disconnected) => {
                     self.message = Some((
-                        "Theme application interrupted".into(),
-                        "Check the component settings before retrying.".into(),
+                        name.clone(),
+                        "The operation was interrupted. Check the component settings before retrying.".into(),
                     ));
                     self.job = None;
                 }
                 Err(mpsc::TryRecvError::Empty) => {}
             }
+        }
+        if self.confirm_restore {
+            let modal = Modal::new(Id::new("restore-confirm")).show(ctx, |ui| {
+                ui.set_width(410.0);
+                ui.label(title("Restore previous settings?", 22.0));
+                ui.label("Restore each component to the state saved before its first change. WTE backs up files it replaces during restore. Your theme library stays available.");
+                ui.horizontal(|ui| {
+                    if button(ui, "Cancel", false).clicked() { self.confirm_restore = false; }
+                    if button(ui, "Restore settings", true).clicked() {
+                        self.confirm_restore = false;
+                        self.start_job(ctx, "Restore results".into(), apply::restore);
+                    }
+                });
+            });
+            if modal.should_close() {
+                self.confirm_restore = false;
+            }
+            return;
         }
         if let Some((label, detail)) = &self.message {
             let close = Modal::new(Id::new("message")).show(ctx, |ui| {
@@ -785,7 +889,7 @@ impl App {
         } else if let Some((name, report)) = &self.report {
             let close = Modal::new(Id::new("report")).show(ctx, |ui| {
                 ui.set_width(470.0);
-                ui.label(title(format!("Apply results · {name}"), 22.0));
+                ui.label(title(name, 22.0));
                 ScrollArea::vertical()
                     .max_height((ctx.content_rect().height() - 160.0).max(100.0))
                     .show(ui, |ui| {
@@ -836,13 +940,6 @@ impl App {
     }
 }
 
-fn pick_wallpaper() -> Option<PathBuf> {
-    rfd::FileDialog::new()
-        .set_title("Choose a wallpaper")
-        .add_filter("Photo", &["jpg", "jpeg", "png"])
-        .pick_file()
-}
-
 fn section(ui: &mut Ui, name: &str, body: impl FnOnce(&mut Ui)) {
     Frame::new()
         .fill(ui.visuals().window_fill)
@@ -887,13 +984,14 @@ fn border_picker(
 
 impl eframe::App for App {
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
-        // Keep the library lock until the in-flight apply finishes even if the window closes.
+        // Keep the library lock until an in-flight apply or restore finishes.
         if let Some((_, job)) = self.job.take() {
             let _ = job.recv();
         }
     }
 
     fn update(&mut self, ctx: &eframe::egui::Context, _frame: &mut eframe::Frame) {
+        self.finish_photo();
         self.header(ctx);
         CentralPanel::default()
             .frame(Frame::new().fill(ctx.style().visuals.panel_fill))
@@ -910,6 +1008,15 @@ impl eframe::App for App {
                         });
                 });
             });
-        self.dialogs(ctx);
+        if self.pending_photo.is_some() {
+            Modal::new(Id::new("opening-wallpaper")).show(ctx, |ui| {
+                ui.horizontal(|ui| {
+                    ui.spinner();
+                    ui.label("Opening wallpaper…");
+                });
+            });
+        } else {
+            self.dialogs(ctx);
+        }
     }
 }

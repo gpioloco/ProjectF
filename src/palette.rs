@@ -68,6 +68,10 @@ fn luminance(rgb: Rgb) -> f32 {
 }
 
 pub fn readable(rgb: Rgb, surface: Rgb) -> Rgb {
+    with_contrast(rgb, surface, 4.5)
+}
+
+pub fn with_contrast(rgb: Rgb, surface: Rgb, minimum: f32) -> Rgb {
     let bg = luminance(surface) + 0.05;
     let end = if bg * bg > 0.05 * 1.05 {
         [0; 3]
@@ -78,26 +82,40 @@ pub fn readable(rgb: Rgb, surface: Rgb) -> Rgb {
         .map(|step| mix(rgb, end, step as f32 / 32.0))
         .find(|candidate| {
             let fg = luminance(*candidate) + 0.05;
-            fg.max(bg) / fg.min(bg) >= 4.5
+            fg.max(bg) / fg.min(bg) >= minimum
         })
         .unwrap_or(end)
 }
 
 impl Palette {
+    pub fn soften_dark_accents(&mut self) {
+        // Accents paint borders and highlights. Text uses its own contrast-tested roles.
+        for color in [&mut self.accent, &mut self.secondary] {
+            let source = *color;
+            *color = (0..=100)
+                .map(|step| mix(source, [0; 3], step as f32 / 100.0))
+                .find(|c| luminance(*c) <= 0.13 && c.iter().all(|v| *v <= 152))
+                .unwrap();
+        }
+    }
     pub fn variant(&self, mode: Appearance) -> Self {
         let (base, raised, ink, quiet) = match mode {
             Appearance::Light => (253, 236, 28, 83),
             Appearance::Dark => (16, 36, 246, 167),
         };
         let surface = mix([raised; 3], self.accent, 0.13);
-        Self {
+        let mut palette = Self {
             background: mix([base; 3], self.accent, 0.06),
             surface,
             text: readable(mix([ink; 3], self.accent, 0.12), surface),
             muted: readable(mix([quiet; 3], self.accent, 0.20), surface),
             accent: readable(self.accent, surface),
             secondary: readable(self.secondary, surface),
+        };
+        if mode == Appearance::Dark {
+            palette.soften_dark_accents();
         }
+        palette
     }
 }
 
