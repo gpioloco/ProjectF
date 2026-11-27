@@ -1,4 +1,8 @@
-use crate::theme::{Theme, hex};
+use crate::{
+    exovoid,
+    palette::mix,
+    theme::{Palette, Theme, hex},
+};
 use anyhow::{Context, Result, ensure};
 use jsonc_parser::{
     ParseOptions,
@@ -55,127 +59,83 @@ pub fn vscode(input: &str, t: &Theme) -> Result<String> {
         .object_value_or_create()
         .context("VS Code settings must be a JSON object")?;
     if t.code_theme.trim().is_empty() {
-        const BASE: &str = "Monokai";
-        let scope = format!("[{BASE}]");
-        set(&obj, "workbench.colorTheme", BASE)?;
+        set(&obj, "workbench.colorTheme", exovoid::NAME)?;
+        let scope = format!("[{}]", exovoid::NAME);
         let workbench = object(&object(&obj, "workbench.colorCustomizations")?, &scope)?;
-        let p = &t.palette;
-        for (color, keys) in [
-            (
-                p.background,
-                &[
-                    "editor.background",
-                    "terminal.background",
-                    "panel.background",
-                    "editorGroupHeader.tabsBackground",
-                ][..],
-            ),
-            (
-                p.surface,
-                &[
-                    "sideBar.background",
-                    "activityBar.background",
-                    "titleBar.activeBackground",
-                    "statusBar.background",
-                    "tab.inactiveBackground",
-                    "input.background",
-                    "dropdown.background",
-                    "editorWidget.background",
-                    "editor.lineHighlightBackground",
-                ][..],
-            ),
-            (
-                p.text,
-                &[
-                    "foreground",
-                    "editor.foreground",
-                    "terminal.foreground",
-                    "sideBar.foreground",
-                    "titleBar.activeForeground",
-                    "statusBar.foreground",
-                    "tab.activeForeground",
-                    "input.foreground",
-                ][..],
-            ),
-            (
-                p.muted,
-                &[
-                    "editorLineNumber.foreground",
-                    "descriptionForeground",
-                    "tab.inactiveForeground",
-                ][..],
-            ),
-            (
-                p.accent,
-                &[
-                    "focusBorder",
-                    "button.background",
-                    "activityBar.activeBorder",
-                    "tab.activeBorderTop",
-                    "editorCursor.foreground",
-                    "progressBar.background",
-                    "activityBarBadge.background",
-                    "textLink.foreground",
-                    "list.highlightForeground",
-                ][..],
-            ),
-            (
-                p.background,
-                &[
-                    "button.foreground",
-                    "activityBarBadge.foreground",
-                    "tab.activeBackground",
-                ][..],
-            ),
-            (
-                p.secondary,
-                &["terminal.ansiYellow", "editorLineNumber.activeForeground"][..],
-            ),
-        ] {
-            for key in keys {
-                set(&workbench, key, hex(color))?;
+        for (key, value) in exovoid::SOURCE["colors"].as_object().unwrap() {
+            if let Some(color) = workbench_override(key, value.as_str().unwrap(), &t.palette) {
+                set(&workbench, key, color)?;
             }
         }
+        // The upstream theme inherits the terminal surface and active activity-bar indicator.
+        set(&workbench, "terminal.background", hex(t.palette.background))?;
         set(
             &workbench,
-            "editor.selectionBackground",
-            format!("{}45", hex(p.accent)),
+            "activityBar.activeBorder",
+            hex(t.palette.accent),
         )?;
-        let tokens = object(&object(&obj, "editor.tokenColorCustomizations")?, &scope)?;
-        for (key, rgb) in [
-            ("comments", p.muted),
-            ("strings", p.secondary),
-            ("numbers", p.secondary),
-            ("keywords", p.accent),
-            ("functions", p.text),
-            ("types", p.accent),
-            ("variables", p.text),
-        ] {
-            set(&tokens, key, hex(rgb))?;
-        }
-        let sem = object(
-            &object(&obj, "editor.semanticTokenColorCustomizations")?,
-            &scope,
-        )?;
-        let rules = object(&sem, "rules")?;
-        for (key, rgb) in [
-            ("class", p.accent),
-            ("type", p.accent),
-            ("function", p.text),
-            ("method", p.text),
-            ("parameter", p.secondary),
-        ] {
-            // Preserve existing font style fields on object-valued semantic rules.
-            if let Some(rule) = rules.object_value(key) {
-                set(&rule, "foreground", hex(rgb))?;
-            } else {
-                set(&rules, key, hex(rgb))?;
-            }
-        }
     } else {
         set(&obj, "workbench.colorTheme", t.code_theme.trim())?;
     }
     Ok(format!("{bom}{root}"))
+}
+
+/// Recolor the workbench, keeping ExoVoid's text, ANSI colors and overlay opacity intact.
+fn workbench_override(key: &str, original: &str, p: &Palette) -> Option<String> {
+    let id = key.to_ascii_lowercase();
+    if id.contains("foreground") || id.starts_with("terminal.ansi") {
+        return None;
+    }
+    let rgb = if matches!(
+        key,
+        "editor.background"
+            | "editorGutter.background"
+            | "tab.activeBackground"
+            | "minimap.background"
+            | "editorGroup.emptyBackground"
+            | "editorCursor.background"
+    ) {
+        p.background
+    } else if [
+        "error",
+        "warning",
+        "added",
+        "modified",
+        "deleted",
+        "inserted",
+        "removed",
+        "conflicting",
+        "nomatches",
+    ]
+    .iter()
+    .any(|word| id.contains(word))
+    {
+        // Retain recognizable diagnostic and diff hues on the new surfaces.
+        mix(p.surface, exovoid::rgb(original), 0.68)
+    } else if id.contains("shadow") {
+        mix(p.background, [0; 3], 0.65)
+    } else if key == "focusBorder" || id.contains("activeborder") || id == "progressbar.background"
+    {
+        p.accent
+    } else if id.contains("guide") || id.starts_with("scrollbarslider.") {
+        mix(p.surface, p.muted, 0.45)
+    } else if id.contains("border") || id.contains("outline") || id.contains("stroke") {
+        mix(p.surface, p.accent, 0.44)
+    } else if id.contains("match") || id.contains("highlight") || id.contains("incoming") {
+        mix(p.surface, p.secondary, 0.40)
+    } else if id.contains("selection")
+        || id.contains("selected")
+        || id.contains("hover")
+        || id.contains("activebackground")
+        || id.contains("badge")
+        || id.starts_with("button.")
+        || id.contains("dropbackground")
+    {
+        mix(p.surface, p.accent, 0.35)
+    } else {
+        p.surface
+    };
+    Some(format!("{}{}", hex(rgb), &original[7..]))
 }
 
 fn submap(parent: &Mapping, key: &str) -> Result<Mapping> {
@@ -239,14 +199,11 @@ augroup END
 
 pub fn nvim_palette(t: &Theme) -> String {
     let p = &t.palette;
-    let (bg, surface, fg, muted, accent, second) = (
-        hex(p.background),
-        hex(p.surface),
-        hex(p.text),
-        hex(p.muted),
-        hex(p.accent),
-        hex(p.secondary),
-    );
+    let bg = hex(p.background);
+    let surface = hex(p.surface);
+    let accent = hex(p.accent);
+    let selection = hex(mix(p.surface, p.accent, 0.35));
+    let fg = exovoid::workbench("editor.foreground");
     let mut out = format!(
         "\" Windows Theme Engine\nset termguicolors\nset background={}\nhighlight clear\nif exists('syntax_on') | syntax reset | endif\nlet g:colors_name = 'wte-palette'\n",
         if (p.background[0] as u32 * 299
@@ -259,31 +216,87 @@ pub fn nvim_palette(t: &Theme) -> String {
             "dark"
         }
     );
-    for (names, fore, back) in [
-        ("Normal NormalNC EndOfBuffer", &fg, &bg),
-        ("NormalFloat Pmenu StatusLineNC", &fg, &surface),
-        ("LineNr Comment NonText", &muted, &bg),
+    for (groups, fore, back) in [
+        ("Normal NormalNC EndOfBuffer", fg, bg.as_str()),
         (
-            "CursorLineNr Title Directory Special Statement Keyword Type PreProc",
-            &accent,
-            &bg,
+            "NormalFloat Pmenu StatusLineNC StatusLine",
+            fg,
+            surface.as_str(),
         ),
-        ("Cursor", &bg, &accent),
-        ("Visual PmenuSel StatusLine Search", &bg, &accent),
-        ("ColorColumn CursorLine", &fg, &surface),
-        ("FloatBorder WinSeparator", &accent, &surface),
         (
-            "String Constant Number Boolean Character Identifier",
-            &second,
-            &bg,
+            "LineNr",
+            exovoid::workbench("editorLineNumber.foreground"),
+            bg.as_str(),
         ),
-        ("Function", &fg, &bg),
+        (
+            "CursorLineNr",
+            exovoid::workbench("editorLineNumber.activeForeground"),
+            surface.as_str(),
+        ),
+        (
+            "FloatBorder WinSeparator",
+            accent.as_str(),
+            surface.as_str(),
+        ),
+        ("Cursor", bg.as_str(), accent.as_str()),
+        ("PmenuSel Search", fg, selection.as_str()),
+        ("Visual", "NONE", selection.as_str()),
+        ("ColorColumn CursorLine", "NONE", surface.as_str()),
     ] {
-        for name in names.split_whitespace() {
-            out += &format!("highlight {name} guifg={fore} guibg={back}\n");
+        for group in groups.split_whitespace() {
+            out += &format!("highlight {group} guifg={fore} guibg={back} gui=NONE\n");
         }
     }
-    out.push_str("highlight! link @keyword Keyword\nhighlight! link @function Function\nhighlight! link @string String\nhighlight! link @type Type\nhighlight! link @comment Comment\n");
+    for (groups, scope) in [
+        ("Comment @comment", "comment"),
+        ("String Character @string @lsp.type.string", "string"),
+        ("SpecialChar @string.escape", "constant.character.escape"),
+        ("Number Float @number @lsp.type.number", "constant.numeric"),
+        ("Boolean @boolean @variable.builtin", "constant.language"),
+        (
+            "Constant @constant @lsp.type.enumMember",
+            "variable.other.constant",
+        ),
+        (
+            "Identifier @variable @variable.parameter @property @lsp.type.variable @lsp.type.parameter @lsp.type.property",
+            "variable",
+        ),
+        (
+            "Function @function @function.call @function.method @function.method.call @lsp.type.function @lsp.type.method",
+            "entity.name.function",
+        ),
+        (
+            "Type Typedef Structure @type @lsp.type.type @lsp.type.class @lsp.type.struct @lsp.type.enum @lsp.type.namespace",
+            "entity.name.type",
+        ),
+        (
+            "Keyword Statement StorageClass @keyword @keyword.function @type.builtin @lsp.type.keyword",
+            "keyword",
+        ),
+        (
+            "Conditional Repeat Exception @keyword.conditional @keyword.repeat @keyword.return @keyword.exception",
+            "keyword.control",
+        ),
+        ("Operator @operator @lsp.type.operator", "keyword.operator"),
+        (
+            "PreProc Include Define Macro PreCondit",
+            "meta.preprocessor",
+        ),
+        ("Delimiter @punctuation", "meta.template.expression"),
+        ("Label", "entity.name.label"),
+        ("Tag @tag", "entity.name.tag"),
+        ("@tag.attribute", "entity.other.attribute-name"),
+        ("@string.regexp", "string.regexp"),
+    ] {
+        let fore = exovoid::syntax(scope);
+        for group in groups.split_whitespace() {
+            out += &format!("highlight {group} guifg={fore} guibg=NONE gui=NONE\n");
+        }
+    }
+    for (token, value) in exovoid::SOURCE["semanticTokenColors"].as_object().unwrap() {
+        let fore = value.as_str().expect("bundled semantic token color");
+        out += &format!("highlight @lsp.type.{token} guifg={fore} guibg=NONE gui=NONE\n");
+    }
     out
 }
 

@@ -6,8 +6,8 @@ use std::{
     io::{BufReader, Cursor},
 };
 
-pub fn load(source: &Wallpaper) -> Result<RgbImage> {
-    fn decode<R: std::io::BufRead + std::io::Seek>(input: R) -> Result<DynamicImage> {
+pub fn decode(source: &Wallpaper) -> Result<DynamicImage> {
+    fn read<R: std::io::BufRead + std::io::Seek>(input: R) -> Result<DynamicImage> {
         let reader = ImageReader::new(input).with_guessed_format()?;
         let mut decoder = reader.into_decoder()?;
         use image::ImageDecoder;
@@ -21,13 +21,43 @@ pub fn load(source: &Wallpaper) -> Result<RgbImage> {
         img.apply_orientation(orientation);
         Ok(img)
     }
-    let img = match source {
-        Wallpaper::Bundled(photo) => decode(Cursor::new(photo.bytes()))?,
-        Wallpaper::Local(path) => decode(BufReader::new(
+    match source {
+        Wallpaper::Bundled(photo) => read(Cursor::new(photo.bytes())),
+        Wallpaper::Local(path) => read(BufReader::new(
             File::open(path).with_context(|| format!("Open {}", path.display()))?,
-        ))?,
+        )),
+    }
+}
+
+// A desktop wallpaper is opaque. Composite PNG transparency onto black consistently
+// for the preview and the rendered JPEG, without exposing RGB hidden under zero alpha.
+pub fn opaque(image: DynamicImage) -> RgbImage {
+    if !image.color().has_alpha() {
+        return image.into_rgb8();
+    }
+    let pixels = image.into_rgba8();
+    RgbImage::from_fn(pixels.width(), pixels.height(), |x, y| {
+        let [r, g, b, a] = pixels.get_pixel(x, y).0;
+        Rgb([r, g, b].map(|v| ((u16::from(v) * u16::from(a) + 127) / 255) as u8))
+    })
+}
+
+#[cfg(any(windows, test))]
+pub fn load(source: &Wallpaper) -> Result<RgbImage> {
+    Ok(opaque(decode(source)?))
+}
+
+pub fn import(root: &std::path::Path, source: &Wallpaper) -> Result<std::path::PathBuf> {
+    let image = decode(source)?;
+    let (extension, bytes) = if image.color().has_alpha() {
+        // Retain coverage so extracting again from the saved wallpaper sees the same pixels.
+        let mut output = Cursor::new(Vec::new());
+        image.write_to(&mut output, image::ImageFormat::Png)?;
+        ("png", output.into_inner())
+    } else {
+        ("jpg", jpeg(&image.into_rgb8())?)
     };
-    Ok(img.into_rgb8())
+    crate::store::stored_asset(root, "images", extension, &bytes)
 }
 
 fn random(state: &mut u32) -> f32 {

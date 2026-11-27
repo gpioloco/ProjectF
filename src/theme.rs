@@ -1,6 +1,6 @@
 use anyhow::{Result, ensure};
 use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 pub type Rgb = [u8; 3];
 pub fn hex([r, g, b]: Rgb) -> String {
@@ -109,11 +109,11 @@ impl Theme {
         };
         let [background, surface, text, muted, accent, secondary] =
             colors.map(|c: u32| [(c >> 16) as u8, (c >> 8) as u8, c as u8]);
-        Self {
-            id: id.into(),
-            name: photo.title().into(),
-            wallpaper: Wallpaper::Bundled(photo),
-            palette: Palette {
+        Self::new(
+            id.into(),
+            photo.title().into(),
+            Wallpaper::Bundled(photo),
+            Palette {
                 background,
                 surface,
                 text,
@@ -121,6 +121,36 @@ impl Theme {
                 accent,
                 secondary,
             },
+        )
+    }
+
+    pub fn from_wallpaper(path: &Path, palette: Palette) -> Self {
+        let stem = path.file_stem().unwrap_or_default().to_string_lossy();
+        let name: String = stem
+            .trim()
+            .chars()
+            .filter(|c| !c.is_control())
+            .take(64)
+            .collect();
+        let name = if name.trim().is_empty() {
+            "Wallpaper theme".into()
+        } else {
+            name
+        };
+        Self::new(
+            format!("custom-{}", crate::unique_id()),
+            name,
+            Wallpaper::Local(path.to_owned()),
+            palette,
+        )
+    }
+
+    fn new(id: String, name: String, wallpaper: Wallpaper, palette: Palette) -> Self {
+        Self {
+            id,
+            name,
+            wallpaper,
+            palette,
             effects: Effects::default(),
             desktop: true,
             vscode: true,

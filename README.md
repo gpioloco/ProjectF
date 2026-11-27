@@ -1,6 +1,6 @@
 # WTE · Windows Theme Engine
 
-WTE is a portable Rust app for Windows 11. Apply one palette across your wallpaper, Windows accent, VS Code, Neovim and GlazeWM borders. The three bundled presets work offline, and the theme editor lets you create your own.
+WTE is a portable Rust app for Windows 11. Apply one palette across your wallpaper, Windows accent, VS Code, Neovim and GlazeWM borders. Start from one of three bundled presets or let WTE pick an accent and build a theme from a photograph. VS Code and Neovim keep ExoVoid syntax colors as you switch wallpapers.
 
 [Run the portable app](#run-the-portable-app) · [Build from source](#build-from-source) · [Apply a preset](#apply-a-preset) · [Create a custom theme](#create-a-custom-theme)
 
@@ -8,7 +8,7 @@ WTE is a portable Rust app for Windows 11. Apply one palette across your wallpap
 
 ## Run the portable app
 
-Extract `WTE-0.1.0-windows-x64.zip` and double-click `wte.exe`. WTE opens in **Library**. VS Code, Neovim and GlazeWM are optional. The apply results identify any enabled integration WTE could not find.
+Extract `WTE-0.2.0-windows-x64.zip` and double-click `wte.exe`. WTE opens in **Library**. VS Code, Neovim and GlazeWM are optional. The apply results identify any enabled integration WTE could not find.
 
 ## Build from source
 
@@ -52,15 +52,15 @@ Run `cargo test --locked` from the repository root. With `nvim` on `PATH`, `carg
 
 ## Create a custom theme
 
-1. Select a starting theme and choose **New theme**. **Edit theme** also creates a copy when you start from a preset. On a saved custom theme, **Edit theme** updates that entry.
-2. Enter a **Theme name** and choose a wallpaper. **Choose local image…** accepts JPEG or PNG images up to 40 megapixels. WTE copies an imported image into its library when you save.
-3. Adjust **Blur**, **Raindrops** and **Film grain** while watching the preview. To reproduce *Alpine Rain* below, start with **Blue Hour** and set blur to **8%**, raindrops to **74%** and film grain to **6%**. WTE renders the effects into a still image, so you can close the app after applying it.
-4. Click a swatch in **Color palette** to edit it. **Accent** supplies the Windows accent and the focused GlazeWM border. **Surface** supplies the unfocused border. Clear **Use palette** beside either border to choose its color independently.
-5. Under **Components**, choose which applications WTE should update. Leave the VS Code and Neovim theme fields blank to use the palette, or enter the name of a theme already installed in that editor.
+1. In **Library**, choose **Theme from wallpaper…** and pick a local JPEG or PNG up to 40 megapixels. WTE opens an editable draft named after the file. It samples visible pixels locally, groups similar hues, and selects a prominent accent and a supporting color. Grayscale photos produce neutral palettes. WTE lifts darker accents for contrast on the generated editor surfaces.
+2. To start from a preset instead, select its card and choose **New theme**. In the editor, **Choose local image…** replaces the wallpaper. **Use wallpaper colors** regenerates the six swatches from the selected image, including bundled wallpapers. You can tweak each swatch and rename the draft before saving.
+3. Adjust **Blur**, **Raindrops** and **Film grain** while watching the preview. The *Alpine Rain* example uses the Blue Hour photograph with blur at **8%**, raindrops at **74%** and film grain at **6%**. The effects render into a still wallpaper, so you can close WTE after applying it.
+4. **Accent** supplies the Windows accent and focused GlazeWM border. **Surface** supplies the unfocused border. Clear **Use palette** beside either border to choose its color independently.
+5. Under **Components**, select the applications to update. Leave the editor theme fields blank for ExoVoid syntax with wallpaper-based backgrounds, highlights and borders. Enter an installed VS Code theme or Neovim colorscheme name to use that editor's own theme.
 
-![Alpine Rain in the theme editor with its wallpaper, six palette colors, component choices and all three effect sliders visible](docs/screenshots/theme-editor.png)
+![Alpine Rain in the theme editor with six colors extracted from the mountain photograph, wallpaper effects and component choices](docs/screenshots/theme-editor.png)
 
-Choose **Save theme** to return to the library. Under **Collection**, select **Custom** to find it again. The **Editor** preview shows how the colors read together. Select **Apply theme** when you want to update your setup.
+Choose **Save theme** to copy the imported wallpaper to the local library and return to the collection. Under **Collection**, select **Custom** to find it again. The **Editor** preview shows how the colors read together. Select **Apply theme** when you want to update your setup.
 
 ![The saved Alpine Rain theme in the Custom collection, with a code sample over the filtered wallpaper and the Apply theme button](docs/screenshots/saved-theme.png)
 
@@ -69,9 +69,13 @@ Choose **Save theme** to return to the library. Under **Collection**, select **C
 | Component | Interface and scope |
 | --- | --- |
 | Windows desktop | WTE opens a local `.theme` file through the registered Windows shell handler. The file specifies a fill-mode wallpaper and an explicit accent color. Personalization and organizational policy control the final desktop appearance. [Microsoft theme file format](https://learn.microsoft.com/en-us/windows/win32/controls/themesfileformat-overview) |
-| VS Code | WTE edits the default stable profile at `%APPDATA%\Code\User\settings.json`. Generated palettes use scoped workbench, syntax and semantic colors on the bundled Monokai theme. WTE preserves comments, unrelated keys and other theme scopes. Named profiles, workspace settings and automatic theme selection can take precedence. [VS Code theme settings](https://code.visualstudio.com/docs/configure/themes) |
-| Neovim | WTE writes a colorscheme, selection file and Vimscript loader under `stdpath('data')/site/pack/wte/start/wte`. After the initial restart, changes load on startup or when the frontend delivers `FocusGained`. [Neovim packages](https://neovim.io/doc/user/pack/) |
+| VS Code | WTE edits the default stable profile at `%APPDATA%\Code\User\settings.json`. Its generated mode selects **ExoVoid Classic Syntax - Dark Soft Blue** and scopes interface overrides to that theme. TextMate rules, semantic token rules, font styles and workbench text colors come from ExoVoid. WTE preserves comments, unrelated settings and other theme scopes. Named profiles, workspace settings and automatic theme selection can take precedence. [VS Code theme settings](https://code.visualstudio.com/docs/configure/themes) |
+| Neovim | WTE writes a colorscheme, selection file and Vimscript loader under `stdpath('data')/site/pack/wte/start/wte`. Classic highlights, Tree-sitter captures and LSP token groups use colors from the same ExoVoid theme. After the initial restart, changes load on startup or when the frontend delivers `FocusGained`. [Neovim packages](https://neovim.io/doc/user/pack/) |
 | GlazeWM v3 | WTE updates the enabled flag and color for focused and unfocused borders in `%USERPROFILE%\.glzr\glazewm\config.yaml` or the absolute path in `GLAZEWM_CONFIG_PATH`. It requests a reload through the CLI for a standard Program Files installation. Border effects require Windows 11. [GlazeWM configuration](https://github.com/glzr-io/glazewm#config-window-effects) |
+
+### First use with VS Code
+
+WTE reuses an installed ExoVoid extension that provides Dark Soft Blue. Otherwise, on **Apply theme**, it passes the bundled ExoVoid 1.4.0 VSIX to VS Code’s extension manager. The package contains declarative themes and works offline. If WTE cannot find the CLI, **Apply results** shows the local file to select with **Extensions: Install from VSIX…**. Organization extension policies still apply. A named editor override skips this installation step.
 
 ## Backups and recovery
 
@@ -84,5 +88,7 @@ WTE stores its library, imported photos, rendered wallpapers and desktop themes 
 WTE runs with the current user’s privileges. It works offline without a service, scheduled task, startup entry, direct registry edits or editor extension downloads. The portable build is unsigned. An organization’s application-control policy may require an approved or signed build. The repository includes the Rust source, dependency lockfile and Windows privilege manifest for review.
 
 ## Credits
+
+ExoVoid is by GinoPioLoco and uses the MIT license. WTE bundles the published 1.4.0 extension. Its Dark Soft Blue JSON matches the pinned source. [Theme source](https://github.com/gpioloco/ExoVoid/blob/58413770f8575c8835073f6d769c9951f46bbe55/themes/ExoVoidClassicSyntax_DarkSoftBlue.json) · [Extension listing](https://marketplace.visualstudio.com/items?itemName=GinoPioLoco.exovoid) · [ExoVoid license](assets/exovoid/LICENSE)
 
 The bundled photographs use the Unsplash License. The UI uses DM Sans under the SIL Open Font License. [Wallpaper credits](assets/wallpapers/CREDITS.md) · [Unsplash License](https://unsplash.com/license) · [DM Sans license](assets/fonts/OFL.txt)

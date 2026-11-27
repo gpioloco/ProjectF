@@ -60,6 +60,44 @@ fn install_nvim(package: &Path, t: &Theme) -> Result<()> {
     )
 }
 
+#[cfg(any(windows, test))]
+fn exovoid_registered(extensions: &Path) -> Result<bool> {
+    let Some(index) = read_optional(&extensions.join("extensions.json"))? else {
+        return Ok(false);
+    };
+    let entries: Vec<serde_json::Value> =
+        serde_json::from_slice(&index).context("Read VS Code’s extension list")?;
+    for entry in entries {
+        if !entry["identifier"]["id"]
+            .as_str()
+            .is_some_and(|id| id.eq_ignore_ascii_case("ginopioloco.exovoid"))
+        {
+            continue;
+        }
+        let Some(directory) = entry["relativeLocation"].as_str() else {
+            continue;
+        };
+        if Path::new(directory).file_name().and_then(|s| s.to_str()) != Some(directory) {
+            continue;
+        }
+        let manifest = extensions.join(directory).join("package.json");
+        if let Some(bytes) = read_optional(&manifest)? {
+            let package: serde_json::Value = serde_json::from_slice(&bytes)?;
+            if package["contributes"]["themes"]
+                .as_array()
+                .is_some_and(|themes| {
+                    themes
+                        .iter()
+                        .any(|theme| theme["label"] == crate::exovoid::NAME)
+                })
+            {
+                return Ok(true);
+            }
+        }
+    }
+    Ok(false)
+}
+
 #[derive(Clone)]
 pub struct Entry {
     pub component: &'static str,
@@ -143,19 +181,76 @@ mod platform {
         Ok("Sent wallpaper and accent to Windows Personalization.".into())
     }
 
-    pub fn vscode(t: &Theme, backups: &Path) -> Result<String> {
+    fn ensure_exovoid(root: &Path, base: &directories::BaseDirs) -> Result<bool> {
+        let extensions = base.home_dir().join(".vscode/extensions");
+        if exovoid_registered(&extensions)? {
+            return Ok(false);
+        }
+
+        const PACKAGE: &str = "exovoid-1.4.0.vsix";
+        const BYTES: &[u8] = include_bytes!("../assets/exovoid/exovoid-1.4.0.vsix");
+        let folder = root.join("extensions");
+        let archive = folder.join(PACKAGE);
+        if read_optional(&archive)?.as_deref() != Some(BYTES) {
+            atomic_write(&archive, BYTES)?;
+        }
+        let help = format!(
+            "In VS Code, use ‘Extensions: Install from VSIX…’ with {} and apply the theme again.",
+            archive.display()
+        );
+        let user_bin = base.data_local_dir().join("Programs/Microsoft VS Code/bin");
+        let system_bin =
+            env::var_os("ProgramFiles").map(|p| PathBuf::from(p).join("Microsoft VS Code/bin"));
+        let path = env::var_os("PATH").unwrap_or_default();
+        let cli = std::iter::once(user_bin)
+            .chain(system_bin)
+            .chain(env::split_paths(&path))
+            .filter(|dir| dir.is_absolute() && dir.join("../Code.exe").is_file())
+            .map(|dir| dir.join("code.cmd"))
+            .find(|file| file.is_file())
+            .with_context(|| format!("Could not find the VS Code CLI. {help}"))?;
+        // Both arguments are fixed. Let VS Code validate the local package and enforce its policies.
+        let result = Command::new(cli)
+            .current_dir(folder)
+            .args(["--install-extension", PACKAGE])
+            .creation_flags(0x08000000)
+            .stdin(Stdio::null())
+            .output()
+            .context("Start the VS Code extension manager")?;
+        ensure!(
+            result.status.success(),
+            "VS Code could not install ExoVoid. {} {}",
+            String::from_utf8_lossy(&result.stderr).trim(),
+            help
+        );
+        Ok(true)
+    }
+
+    pub fn vscode(t: &Theme, root: &Path, backups: &Path) -> Result<String> {
         let base = directories::BaseDirs::new().context("Find roaming application data")?;
         let user = base.data_dir().join("Code/User");
         if !user.is_dir() {
             return Ok("Skipped. The default VS Code user profile was not found.".into());
         }
+        let mut installed = false;
         edit_settings(
             &user.join("settings.json"),
             backups,
             "vscode-settings.json",
-            |s| config::vscode(s, t),
+            |s| {
+                let settings = config::vscode(s, t)?;
+                if t.code_theme.trim().is_empty() {
+                    installed = ensure_exovoid(root, &base)?;
+                }
+                Ok(settings)
+            },
         )?;
-        Ok("Updated the default VS Code profile.".into())
+        Ok(if installed {
+            "Installed the bundled ExoVoid theme and updated the default VS Code profile."
+        } else {
+            "Updated the default VS Code profile."
+        }
+        .into())
     }
 
     pub fn nvim(t: &Theme) -> Result<String> {
@@ -234,7 +329,7 @@ pub fn run(root: &Path, t: &Theme) -> Result<Report> {
         report.record("Windows desktop", platform::desktop(root, t));
     }
     if t.vscode {
-        report.record("Visual Studio Code", platform::vscode(t, &backups));
+        report.record("Visual Studio Code", platform::vscode(t, root, &backups));
     }
     if t.nvim {
         report.record("Neovim", platform::nvim(t));
@@ -284,6 +379,72 @@ mod tests {
                 assert_eq!(fs::read_to_string(backup.join("vscode.json"))?, original);
             }
         }
+        Ok(())
+    }
+
+    #[test]
+    fn generated_workbench_inherits_all_exovoid_font_and_syntax_colors() -> Result<()> {
+        use crate::exovoid;
+        assert_eq!(exovoid::SOURCE["name"], exovoid::NAME);
+        for photo in Photo::ALL {
+            let theme = Theme::preset(photo);
+            let result: serde_json::Value = serde_json::from_str(&config::vscode("{}", &theme)?)?;
+            assert_eq!(result["workbench.colorTheme"], exovoid::NAME);
+            assert!(result.get("editor.tokenColorCustomizations").is_none());
+            assert!(
+                result
+                    .get("editor.semanticTokenColorCustomizations")
+                    .is_none()
+            );
+            let changes = &result["workbench.colorCustomizations"][format!("[{}]", exovoid::NAME)];
+            for (key, original) in exovoid::SOURCE["colors"].as_object().unwrap() {
+                let id = key.to_ascii_lowercase();
+                if id.contains("foreground") || id.starts_with("terminal.ansi") {
+                    assert!(changes.get(key).is_none(), "{key}");
+                } else {
+                    let value = changes[key].as_str().unwrap();
+                    assert_eq!(&value[7..], &original.as_str().unwrap()[7..], "{key}");
+                }
+            }
+            assert_eq!(
+                changes["editor.background"],
+                crate::theme::hex(theme.palette.background)
+            );
+            assert_eq!(
+                changes["sideBar.background"],
+                crate::theme::hex(theme.palette.surface)
+            );
+            assert_eq!(
+                changes["focusBorder"],
+                crate::theme::hex(theme.palette.accent)
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn recognizes_installed_exovoid_only_when_it_contributes_the_requested_theme() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        assert!(!exovoid_registered(dir.path())?);
+        let extension = dir.path().join("ginopioloco.exovoid-1.4.0");
+        fs::create_dir(&extension)?;
+        fs::write(
+            dir.path().join("extensions.json"),
+            r#"[{"identifier":{"id":"GinoPioLoco.ExoVoid"},"relativeLocation":"ginopioloco.exovoid-1.4.0"}]"#,
+        )?;
+        let manifest = extension.join("package.json");
+        fs::write(
+            &manifest,
+            r#"{"contributes":{"themes":[{"label":"ExoVoid"}]}}"#,
+        )?;
+        assert!(!exovoid_registered(dir.path())?);
+        fs::write(
+            manifest,
+            serde_json::to_vec(
+                &serde_json::json!({"contributes":{"themes":[{"label":crate::exovoid::NAME}]}}),
+            )?,
+        )?;
+        assert!(exovoid_registered(dir.path())?);
         Ok(())
     }
 
@@ -429,6 +590,12 @@ mod nvim_smoke {
 function! CheckWte(timer) abort
   call assert_equal('wte-palette', get(g:, 'colors_name', ''))
   call assert_equal('#121b16', tolower(synIDattr(hlID('Normal'), 'bg', 'gui')))
+  call assert_equal('#fcfcfc', tolower(synIDattr(hlID('Normal'), 'fg', 'gui')))
+  call assert_equal('#649a4f', tolower(synIDattr(hlID('Comment'), 'fg', 'gui')))
+  call assert_equal('#ca83c3', tolower(synIDattr(hlID('@keyword.return'), 'fg', 'gui')))
+  call assert_equal('#dedfa7', tolower(synIDattr(hlID('@lsp.type.function'), 'fg', 'gui')))
+  call assert_equal('#d39073', tolower(synIDattr(hlID('String'), 'fg', 'gui')))
+  call assert_equal('#b4d0a6', tolower(synIDattr(hlID('@lsp.type.numberLiteral'), 'fg', 'gui')))
   call writefile(['habamax', 'next'], $WTE_TEST_SITE . '/pack/wte/start/wte/active.txt')
   doautocmd FocusGained
   call assert_equal('habamax', get(g:, 'colors_name', ''))

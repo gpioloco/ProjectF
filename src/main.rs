@@ -3,6 +3,8 @@ mod apply;
 #[cfg_attr(not(any(windows, test)), allow(dead_code))]
 mod config;
 mod design;
+mod exovoid;
+mod palette;
 mod store;
 mod theme;
 mod ui;

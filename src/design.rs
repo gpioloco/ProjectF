@@ -159,31 +159,53 @@ pub fn editor_sample(p: &Painter, rect: Rect, t: &crate::theme::Theme) {
         Align2::LEFT_CENTER,
         "palette.rs",
         FontId::monospace(11.0),
-        color(q.text),
+        color(crate::exovoid::rgb(crate::exovoid::workbench(
+            "tab.activeForeground",
+        ))),
     );
-    for (i, (s, c)) in [
-        ("// Desktop palette", q.muted),
-        ("fn main() {", q.accent),
-        ("    apply(\"theme\");", q.secondary),
-        ("}", q.text),
-    ]
-    .into_iter()
-    .enumerate()
-    {
+    let plain = crate::exovoid::workbench("editor.foreground");
+    let function = crate::exovoid::syntax("entity.name.function");
+    let lines: &[&[(&str, &str)]] = &[
+        &[("// Desktop palette", crate::exovoid::syntax("comment"))],
+        &[
+            ("fn", crate::exovoid::syntax("keyword")),
+            (" ", plain),
+            ("main", function),
+            ("() {", plain),
+        ],
+        &[
+            ("    ", plain),
+            ("apply", function),
+            ("(", plain),
+            ("\"theme\"", crate::exovoid::syntax("string")),
+            (");", plain),
+        ],
+        &[("}", plain)],
+    ];
+    for (i, spans) in lines.iter().enumerate() {
         let y = inner.top() + 40.0 + 21.0 * i as f32;
         p.text(
             pos2(inner.left() + 14.0, y),
             Align2::LEFT_CENTER,
-            format!("{}", i + 1),
+            (i + 1).to_string(),
             FontId::monospace(11.0),
-            color(q.muted),
+            color(crate::exovoid::rgb(crate::exovoid::workbench(
+                "editorLineNumber.foreground",
+            ))),
         );
-        p.text(
-            pos2(inner.left() + 38.0, y),
-            Align2::LEFT_CENTER,
-            s,
-            FontId::monospace(13.0),
-            color(c),
+        let mut job = epaint::text::LayoutJob::default();
+        for &(token, hex) in *spans {
+            job.append(
+                token,
+                0.0,
+                TextFormat::simple(FontId::monospace(13.0), color(crate::exovoid::rgb(hex))),
+            );
+        }
+        let line = p.layout_job(job);
+        p.galley(
+            pos2(inner.left() + 38.0, y - line.size().y / 2.0),
+            line,
+            Color32::WHITE,
         );
     }
 }

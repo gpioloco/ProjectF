@@ -1,14 +1,16 @@
 use crate::{
     apply,
     design::*,
-    store::{Library, Store, stored_asset},
-    theme::{Effects, Photo, Theme, Wallpaper, hex},
+    palette,
+    store::{Library, Store},
+    theme::{Effects, Palette, Photo, Theme, Wallpaper, hex},
     wallpaper,
 };
 use anyhow::{Context as _, Result};
 use eframe::egui::*;
 use std::{
     collections::HashMap,
+    path::PathBuf,
     sync::mpsc::{self, Receiver},
 };
 
@@ -28,15 +30,48 @@ struct Preview {
     effects: Effects,
     texture: TextureHandle,
 }
+struct PhotoSample {
+    thumbnail: image::RgbImage,
+    palette: Option<Palette>,
+}
+
+impl PhotoSample {
+    fn load(source: &Wallpaper) -> Result<Self> {
+        let decoded = wallpaper::decode(source)?;
+        let palette = palette::extract(&decoded);
+        let rgb = wallpaper::opaque(decoded);
+        let (w, h) = rgb.dimensions();
+        let scale = (1000.0 / w.max(h) as f32).min(1.0);
+        let thumbnail = image::imageops::thumbnail(
+            &rgb,
+            (w as f32 * scale).round().max(1.0) as u32,
+            (h as f32 * scale).round().max(1.0) as u32,
+        );
+        Ok(Self { thumbnail, palette })
+    }
+}
+
 #[derive(Default)]
 struct Photos {
-    bases: HashMap<Wallpaper, Result<image::RgbImage, String>>,
+    bases: HashMap<Wallpaper, Result<PhotoSample, String>>,
     previews: HashMap<String, Preview>,
 }
 impl Photos {
     fn invalidate(&mut self, source: &Wallpaper) {
         self.bases.remove(source);
         self.previews.retain(|_, p| &p.source != source);
+    }
+    fn sample(&mut self, source: &Wallpaper) -> Result<&PhotoSample, String> {
+        self.bases
+            .entry(source.clone())
+            .or_insert_with(|| PhotoSample::load(source).map_err(|e| format!("{e:#}")))
+            .as_ref()
+            .map_err(Clone::clone)
+    }
+    fn palette(&mut self, source: &Wallpaper) -> Result<Palette, String> {
+        self.sample(source)?.palette.clone().ok_or_else(|| {
+            "No visible colors found. Choose a wallpaper with visible pixels.".into()
+        })
     }
     fn get(&mut self, ctx: &eframe::egui::Context, t: &Theme) -> Result<TextureHandle, String> {
         if let Some(p) = self.previews.get(&t.id)
@@ -45,21 +80,7 @@ impl Photos {
         {
             return Ok(p.texture.clone());
         }
-        let base = self
-            .bases
-            .entry(t.wallpaper.clone())
-            .or_insert_with(|| {
-                let source = wallpaper::load(&t.wallpaper).map_err(|e| format!("{e:#}"))?;
-                let (w, h) = source.dimensions();
-                let scale = (1000.0 / w.max(h) as f32).min(1.0);
-                Ok(image::imageops::thumbnail(
-                    &source,
-                    (w as f32 * scale).round().max(1.0) as u32,
-                    (h as f32 * scale).round().max(1.0) as u32,
-                ))
-            })
-            .as_ref()
-            .map_err(Clone::clone)?;
+        let base = &self.sample(&t.wallpaper)?.thumbnail;
         let pixels = if t.effects == Effects::default() {
             rgb_image(base)
         } else {
@@ -143,6 +164,19 @@ impl App {
                 format!("{} copy", theme.name)
             };
         }
+        self.request_edit(theme);
+    }
+
+    fn theme_from_wallpaper(&mut self, path: PathBuf) {
+        let source = Wallpaper::Local(path.clone());
+        self.photos.invalidate(&source);
+        match self.photos.palette(&source) {
+            Ok(palette) => self.request_edit(Theme::from_wallpaper(&path, palette)),
+            Err(detail) => self.message = Some(("Could not create theme".into(), detail)),
+        }
+    }
+
+    fn request_edit(&mut self, theme: Theme) {
         if self.draft.as_ref().is_some_and(|d| d.theme != d.original) {
             self.replace = Some(theme);
         } else {
@@ -168,14 +202,10 @@ impl App {
         t.vim_scheme = t.vim_scheme.trim().into();
         t.validate()?;
         if let Wallpaper::Local(path) = &t.wallpaper {
-            let decoded = wallpaper::load(&t.wallpaper)?;
             if path.parent() != Some(self.store.root.join("images").as_path()) {
-                t.wallpaper = Wallpaper::Local(stored_asset(
-                    &self.store.root,
-                    "images",
-                    "jpg",
-                    &wallpaper::jpeg(&decoded)?,
-                )?);
+                t.wallpaper = Wallpaper::Local(wallpaper::import(&self.store.root, &t.wallpaper)?);
+            } else {
+                wallpaper::decode(&t.wallpaper)?;
             }
         }
         let mut library = self.library.clone();
@@ -258,7 +288,16 @@ impl App {
     }
     fn library_ui(&mut self, ui: &mut Ui) {
         let selected = self.current();
-        ui.label(title("Theme library", 37.0));
+        ui.horizontal(|ui| {
+            ui.label(title("Theme library", 37.0));
+            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                if button(ui, "Theme from wallpaper…", false).clicked()
+                    && let Some(path) = pick_wallpaper()
+                {
+                    self.theme_from_wallpaper(path);
+                }
+            });
+        });
         ui.add_space(11.0);
         let width = ui.available_width();
         let h = if width < 870.0 { 245.0 } else { 272.0 };
@@ -351,6 +390,14 @@ impl App {
                 .min_size(vec2(105.0, 35.0))
                 .corner_radius(5),
         );
+        let apply = if selected.vscode && selected.code_theme.trim().is_empty() {
+            apply.on_hover_text(format!(
+                "VS Code uses {}. On first use WTE installs the bundled theme through VS Code.",
+                crate::exovoid::NAME
+            ))
+        } else {
+            apply
+        };
         if apply.clicked() {
             self.apply(ui.ctx(), selected.clone());
         }
@@ -593,11 +640,12 @@ impl App {
                     for p in Photo::ALL {ui.selectable_value(&mut t.wallpaper,Wallpaper::Bundled(p),p.title());}
                 });
                 if button(ui,"Choose local image…",false).clicked()
-                    && let Some(path)=rfd::FileDialog::new().set_title("Choose a wallpaper").add_filter("Photo",&["jpg","jpeg","png"]).pick_file() {
+                    && let Some(path)=pick_wallpaper() {
                     let source=Wallpaper::Local(path);
-                    match wallpaper::load(&source) {
-                        Ok(_)=>{self.photos.invalidate(&source);t.wallpaper=source;}
-                        Err(e)=>self.message=Some(("Could not open wallpaper".into(),format!("{e:#}"))),
+                    self.photos.invalidate(&source);
+                    match self.photos.sample(&source) {
+                        Ok(_)=>t.wallpaper=source,
+                        Err(detail)=>self.message=Some(("Could not open wallpaper".into(),detail)),
                     }
                 }
             });
@@ -618,13 +666,22 @@ impl App {
                         if i%2==1 {ui.end_row();}
                     }
                 });
+                if button(ui,"Use wallpaper colors",false).clicked() {
+                    match self.photos.palette(&t.wallpaper) {
+                        Ok(palette)=>t.palette=palette,
+                        Err(detail)=>self.message=Some(("Could not detect wallpaper colors".into(),detail)),
+                    }
+                }
             });
             section(right,"Components",|ui|{
                 ui.checkbox(&mut t.desktop,"Windows wallpaper and accent");
                 ui.checkbox(&mut t.vscode,"Visual Studio Code");
-                if t.vscode{ui.add(TextEdit::singleline(&mut t.code_theme).background_color(PAPER).margin(Margin::symmetric(7,5)).hint_text("Theme palette, or installed VS Code theme").desired_width(f32::INFINITY)).on_hover_text("Leave blank to use the palette above. An installed theme uses its own colors.");}
+                if t.vscode{ui.add(TextEdit::singleline(&mut t.code_theme).background_color(PAPER).margin(Margin::symmetric(7,5)).hint_text("ExoVoid, or installed VS Code theme").desired_width(f32::INFINITY)).on_hover_text("Leave blank to use ExoVoid syntax with your palette. WTE installs the bundled ExoVoid theme through VS Code on first use.");}
+                if t.vscode && t.code_theme.trim().is_empty() {
+                    ui.label(muted("First use installs the bundled ExoVoid theme in VS Code if needed."));
+                }
                 ui.checkbox(&mut t.nvim,"Neovim");
-                if t.nvim{ui.add(TextEdit::singleline(&mut t.vim_scheme).background_color(PAPER).margin(Margin::symmetric(7,5)).hint_text("Theme palette, or installed colorscheme").desired_width(f32::INFINITY)).on_hover_text("Leave blank to use the palette above.");}
+                if t.nvim{ui.add(TextEdit::singleline(&mut t.vim_scheme).background_color(PAPER).margin(Margin::symmetric(7,5)).hint_text("ExoVoid syntax, or installed colorscheme").desired_width(f32::INFINITY)).on_hover_text("Leave blank to use matching ExoVoid syntax with your palette.");}
                 ui.checkbox(&mut t.glaze,"GlazeWM borders");
                 if t.glaze {
                     border_picker(ui,"Focused",t.palette.accent,&mut t.focused);
@@ -710,6 +767,13 @@ impl App {
             }
         }
     }
+}
+
+fn pick_wallpaper() -> Option<PathBuf> {
+    rfd::FileDialog::new()
+        .set_title("Choose a wallpaper")
+        .add_filter("Photo", &["jpg", "jpeg", "png"])
+        .pick_file()
 }
 
 fn section(ui: &mut Ui, name: &str, body: impl FnOnce(&mut Ui)) {
