@@ -1,0 +1,148 @@
+use crate::theme::Theme;
+use anyhow::{Context, Result, ensure};
+use serde::{Deserialize, Serialize};
+use std::{
+    collections::HashSet,
+    fs,
+    io::{ErrorKind, Write},
+    path::{Path, PathBuf},
+};
+use tempfile::NamedTempFile;
+
+#[derive(Default, Clone, Serialize, Deserialize)]
+pub struct Library {
+    pub themes: Vec<Theme>,
+}
+
+pub struct Store {
+    pub root: PathBuf,
+    _lock: fs::File,
+}
+impl Store {
+    pub fn open() -> Result<Self> {
+        let dirs =
+            directories::BaseDirs::new().context("Find your local application data folder")?;
+        let root = dirs.data_local_dir().join("WTE");
+        fs::create_dir_all(&root)?;
+        let lock = fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(root.join("library.lock"))?;
+        lock.try_lock()
+            .context("WTE could not lock its library. Close any other WTE window and try again.")?;
+        Ok(Self { root, _lock: lock })
+    }
+    pub fn load(&self) -> Result<Library> {
+        let Some(data) = read_optional(&self.root.join("library.json"))? else {
+            return Ok(Library::default());
+        };
+        let library: Library = serde_json::from_slice(&data).context("Read saved theme library")?;
+        let mut ids = HashSet::new();
+        for theme in &library.themes {
+            theme.validate()?;
+            ensure!(
+                theme.id.starts_with("custom-") && ids.insert(&theme.id),
+                "Invalid custom theme identifier."
+            );
+        }
+        Ok(library)
+    }
+    pub fn save(&self, library: &Library) -> Result<()> {
+        atomic_write(
+            &self.root.join("library.json"),
+            &serde_json::to_vec_pretty(library)?,
+        )
+    }
+}
+
+pub fn read_optional(path: &Path) -> Result<Option<Vec<u8>>> {
+    match fs::read(path) {
+        Ok(v) => Ok(Some(v)),
+        Err(e) if e.kind() == ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(e).with_context(|| format!("Read {}", path.display())),
+    }
+}
+
+pub fn atomic_write(path: &Path, bytes: &[u8]) -> Result<()> {
+    let resolved;
+    let path = if path.is_symlink() {
+        resolved = fs::canonicalize(path)
+            .with_context(|| format!("Resolve linked file {}", path.display()))?;
+        resolved.as_path()
+    } else {
+        path
+    };
+    let parent = path.parent().context("Missing parent directory")?;
+    fs::create_dir_all(parent)?;
+    let existing = match fs::metadata(path) {
+        Ok(meta) => {
+            ensure!(
+                !meta.permissions().readonly(),
+                "{} is read-only",
+                path.display()
+            );
+            Some(meta)
+        }
+        Err(e) if e.kind() == ErrorKind::NotFound => None,
+        Err(e) => return Err(e.into()),
+    };
+    let mut tmp = NamedTempFile::new_in(parent)?;
+    tmp.write_all(bytes)?;
+    tmp.as_file().sync_all()?;
+    if let Some(meta) = existing {
+        replace_existing(tmp, path, meta).with_context(|| format!("Replace {}", path.display()))?;
+    } else {
+        tmp.persist_noclobber(path)
+            .with_context(|| format!("Create {}", path.display()))?;
+    }
+    Ok(())
+}
+
+#[cfg(not(windows))]
+fn replace_existing(tmp: NamedTempFile, path: &Path, meta: fs::Metadata) -> Result<()> {
+    tmp.as_file().set_permissions(meta.permissions())?;
+    tmp.persist(path)?;
+    Ok(())
+}
+
+#[cfg(windows)]
+fn replace_existing(tmp: NamedTempFile, path: &Path, _meta: fs::Metadata) -> Result<()> {
+    use std::{os::windows::ffi::OsStrExt, ptr::null};
+    use windows_sys::Win32::Storage::FileSystem::{
+        FILE_ATTRIBUTE_NORMAL, ReplaceFileW, SetFileAttributesW,
+    };
+    let destination: Vec<u16> = path.as_os_str().encode_wide().chain([0]).collect();
+    let tmp_path = tmp.into_temp_path();
+    let temporary: Vec<u16> = tmp_path.as_os_str().encode_wide().chain([0]).collect();
+    // Make the tempfile permanent and merge the original ACL and metadata.
+    unsafe {
+        if SetFileAttributesW(temporary.as_ptr(), FILE_ATTRIBUTE_NORMAL) == 0
+            || ReplaceFileW(
+                destination.as_ptr(),
+                temporary.as_ptr(),
+                null(),
+                0,
+                null(),
+                null(),
+            ) == 0
+        {
+            return Err(std::io::Error::last_os_error().into());
+        }
+    }
+    Ok(())
+}
+
+pub fn stored_asset(root: &Path, folder: &str, extension: &str, data: &[u8]) -> Result<PathBuf> {
+    use std::hash::Hasher;
+    let mut hash = std::collections::hash_map::DefaultHasher::new();
+    hash.write(data);
+    let path = root
+        .join(folder)
+        .join(format!("{:016x}.{extension}", hash.finish()));
+    if read_optional(&path)?.as_deref() != Some(data) {
+        atomic_write(&path, data)?;
+    }
+    Ok(path)
+}
