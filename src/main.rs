@@ -11,6 +11,8 @@ mod exovoid;
 mod nvim;
 mod palette;
 mod restore;
+#[cfg(windows)]
+mod rillshift;
 mod store;
 mod terminal;
 mod theme;
@@ -49,7 +51,7 @@ fn main() -> eframe::Result {
         ..Default::default()
     };
     let result = eframe::run_native(
-        "WTE · Windows Theme Engine",
+        "WTE · Window Theme Engine",
         options,
         Box::new(|cc| {
             let store = store::Store::open()?;
@@ -64,7 +66,7 @@ fn main() -> eframe::Result {
     );
     if let Err(e) = &result {
         rfd::MessageDialog::new()
-            .set_title("Windows Theme Engine")
+            .set_title("Window Theme Engine")
             .set_description(e.to_string())
             .set_level(rfd::MessageLevel::Error)
             .show();

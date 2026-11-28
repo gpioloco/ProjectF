@@ -3,28 +3,28 @@ RequestExecutionLevel user
 AllowSkipFiles off
 ManifestDPIAware true
 SetCompressor /SOLID lzma
-Name "Windows Theme Engine"
+Name "Window Theme Engine"
 OutFile "${OUTPUT}"
 InstallDir "$LOCALAPPDATA\Programs\WTE"
 Icon "${SOURCE}/assets/wte.ico"
 UninstallIcon "${SOURCE}/assets/wte.ico"
 VIProductVersion "${VERSION}.0"
-VIAddVersionKey "ProductName" "Windows Theme Engine"
+VIAddVersionKey "ProductName" "Window Theme Engine"
 VIAddVersionKey "ProductVersion" "${VERSION}"
-VIAddVersionKey "FileDescription" "Windows Theme Engine Setup"
+VIAddVersionKey "FileDescription" "Window Theme Engine Setup"
 VIAddVersionKey "FileVersion" "${VERSION}"
-VIAddVersionKey "LegalCopyright" "Windows Theme Engine contributors"
+VIAddVersionKey "LegalCopyright" "Window Theme Engine contributors"
 
 !include "MUI2.nsh"
 !include "x64.nsh"
 !define UNINSTALL_KEY "Software\Microsoft\Windows\CurrentVersion\Uninstall\WindowsThemeEngine"
 !define MUI_ICON "${SOURCE}/assets/wte.ico"
 !define MUI_UNICON "${SOURCE}/assets/wte.ico"
-!define MUI_WELCOMEPAGE_TEXT "Install Windows Theme Engine for your Windows account. Setup will add a shortcut to your Start menu."
+!define MUI_WELCOMEPAGE_TEXT "Install Window Theme Engine for your Windows account. Setup will add a shortcut to your Start menu."
 !insertmacro MUI_PAGE_WELCOME
 !insertmacro MUI_PAGE_INSTFILES
 !define MUI_FINISHPAGE_RUN "$INSTDIR\wte.exe"
-!define MUI_FINISHPAGE_RUN_TEXT "Open Windows Theme Engine"
+!define MUI_FINISHPAGE_RUN_TEXT "Open Window Theme Engine"
 !insertmacro MUI_PAGE_FINISH
 !insertmacro MUI_UNPAGE_CONFIRM
 !insertmacro MUI_UNPAGE_INSTFILES
@@ -47,8 +47,13 @@ Section "Install"
     File "/oname=Wallpaper-CREDITS.md" "${SOURCE}\assets\wallpapers\CREDITS.md"
     File "${SOURCE}\installer\THIRD-PARTY-NOTICES.txt"
     WriteUninstaller "$INSTDIR\uninstall.exe"
-    CreateShortcut "$SMPROGRAMS\Windows Theme Engine.lnk" "$INSTDIR\wte.exe"
-    WriteRegStr HKCU "${UNINSTALL_KEY}" "DisplayName" "Windows Theme Engine"
+    ; The uninstall key stays stable across the product rename.
+    ReadRegStr $0 HKCU "${UNINSTALL_KEY}" "InstallLocation"
+    ${If} $0 == "$INSTDIR"
+        Delete "$SMPROGRAMS\Windows Theme Engine.lnk"
+    ${EndIf}
+    CreateShortcut "$SMPROGRAMS\Window Theme Engine.lnk" "$INSTDIR\wte.exe"
+    WriteRegStr HKCU "${UNINSTALL_KEY}" "DisplayName" "Window Theme Engine"
     WriteRegStr HKCU "${UNINSTALL_KEY}" "DisplayVersion" "${VERSION}"
     WriteRegStr HKCU "${UNINSTALL_KEY}" "DisplayIcon" "$INSTDIR\wte.exe"
     WriteRegStr HKCU "${UNINSTALL_KEY}" "InstallLocation" "$INSTDIR"
@@ -65,14 +70,14 @@ Section "Uninstall"
     ClearErrors
     Delete "$INSTDIR\wte.exe"
     IfErrors 0 +3
-        MessageBox MB_OK|MB_ICONSTOP "Close Windows Theme Engine and run the uninstaller again." /SD IDOK
+        MessageBox MB_OK|MB_ICONSTOP "Close Window Theme Engine and run the uninstaller again." /SD IDOK
         Abort
     appRemoved:
     Delete "$INSTDIR\ExoVoid-LICENSE.txt"
     Delete "$INSTDIR\DM-Sans-OFL.txt"
     Delete "$INSTDIR\Wallpaper-CREDITS.md"
     Delete "$INSTDIR\THIRD-PARTY-NOTICES.txt"
-    Delete "$SMPROGRAMS\Windows Theme Engine.lnk"
+    Delete "$SMPROGRAMS\Window Theme Engine.lnk"
     DeleteRegKey HKCU "${UNINSTALL_KEY}"
     Delete "$INSTDIR\uninstall.exe"
     RMDir "$INSTDIR"

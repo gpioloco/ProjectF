@@ -40,8 +40,36 @@ mod settings {
         palette::mix,
     };
     use anyhow::{Context, ensure};
-    use jsonc_parser::cst::{CstInputValue, CstObject};
-    const SCHEME: &str = "WTE Windows Theme Engine";
+    use jsonc_parser::cst::{CstInputValue, CstNode, CstObject};
+    const SCHEME: &str = "WTE Window Theme Engine";
+    const PREVIOUS_SCHEME: &str = "WTE Windows Theme Engine";
+
+    fn migrate_scheme_references(node: &CstNode) -> Result<()> {
+        if let Some(prop) = node.as_object_prop()
+            && prop.decoded_name().as_deref() == Some("colorScheme")
+        {
+            if let Some(pair) = prop.object_value() {
+                for mode in ["dark", "light"] {
+                    if string_value(&pair, mode).as_deref() == Some(PREVIOUS_SCHEME) {
+                        set(&pair, mode, SCHEME)?;
+                    }
+                }
+            } else if prop
+                .value()
+                .and_then(|v| v.as_string_lit())
+                .and_then(|s| s.decoded_value().ok())
+                .as_deref()
+                == Some(PREVIOUS_SCHEME)
+            {
+                prop.set_value(SCHEME.into());
+            }
+        } else {
+            for child in node.children_exclude_trivia_and_tokens() {
+                migrate_scheme_references(&child)?;
+            }
+        }
+        Ok(())
+    }
 
     fn scheme(profile: &CstObject, t: &Theme) -> Result<()> {
         let p = &t.palette;
@@ -172,13 +200,20 @@ mod settings {
                 .array_value_or_create("schemes")
                 .context("Expected schemes to be a list")?;
             let mut current = None;
+            let mut legacy = None;
             for item in schemes.elements() {
                 let item = item
                     .as_object()
                     .context("Expected a Terminal scheme object")?;
                 unique(&item, "name")?;
                 let name = string_value(&item, "name");
-                if name.as_deref() == Some(SCHEME) {
+                if name.as_deref() == Some(PREVIOUS_SCHEME) {
+                    ensure!(
+                        legacy.is_none(),
+                        "Duplicate legacy WTE schemes in Terminal settings"
+                    );
+                    legacy = Some(item);
+                } else if name.as_deref() == Some(SCHEME) {
                     ensure!(
                         current.is_none(),
                         "Duplicate WTE schemes in Terminal settings"
@@ -186,7 +221,10 @@ mod settings {
                     current = Some(item);
                 }
             }
-            let active = current.unwrap_or_else(|| {
+            if current.is_none() && legacy.is_some() {
+                migrate_scheme_references(&obj.clone().into())?;
+            }
+            let active = current.or(legacy).unwrap_or_else(|| {
                 schemes
                     .append(CstInputValue::Object(vec![]))
                     .as_object()
@@ -246,6 +284,22 @@ mod tests {
                     {"name":"WSL"}]},"schemes":[{"name":"Custom","red":"#dd0000"}]});
         let mut t = Theme::preset(Photo::BlueHour);
         let colored: Value = serde_json::from_str(&configure(&original.to_string(), &t)?)?;
+        let mut legacy: Value = serde_json::from_str(
+            &colored
+                .to_string()
+                .replace("WTE Window Theme Engine", "WTE Windows Theme Engine"),
+        )?;
+        legacy["profiles"]["defaults"]["unfocusedAppearance"] =
+            json!({"colorScheme": {"dark": "WTE Windows Theme Engine", "light": "Campbell"}});
+        let mut migrated: Value = serde_json::from_str(&configure(&legacy.to_string(), &t)?)?;
+        assert_eq!(
+            migrated["profiles"]["defaults"]
+                .as_object_mut()
+                .unwrap()
+                .remove("unfocusedAppearance"),
+            Some(json!({"colorScheme":{"dark":"WTE Window Theme Engine","light":"Campbell"}}))
+        );
+        assert_eq!(migrated, colored);
         let profiles = &colored["profiles"];
         assert_eq!(colored["snapToGridOnResize"], true);
         assert_eq!(profiles["list"][0]["padding"], "8,8,100,8");

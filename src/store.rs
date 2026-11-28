@@ -236,6 +236,7 @@ mod tests {
             "posh",
             "terminal",
             "terminal_fit",
+            "rillshift",
         ] {
             legacy.as_object_mut().unwrap().remove(key);
         }
@@ -255,7 +256,7 @@ mod tests {
         assert_eq!(library.themes[0].palette, original.palette);
         library.app_mode = Appearance::Dark;
         let theme = &mut library.themes[0];
-        assert!(!theme.posh && !theme.terminal && !theme.terminal_fit);
+        assert!(!theme.posh && !theme.terminal && !theme.terminal_fit && !theme.rillshift);
         theme.set_mode(Appearance::Light);
         theme.palette.accent = [40, 80, 100];
         let custom_light = theme.palette.clone();

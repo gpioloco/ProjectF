@@ -3,7 +3,7 @@
   "displayName": "WTE ExoVoid Light",
   "publisher": "wte-local",
   "version": "1.0.0",
-  "description": "A light adaptation of ExoVoid Classic Syntax for Windows Theme Engine.",
+  "description": "A light adaptation of ExoVoid Classic Syntax for Window Theme Engine.",
   "engines": { "vscode": "^1.98.0" },
   "license": "MIT",
   "categories": ["Themes"],

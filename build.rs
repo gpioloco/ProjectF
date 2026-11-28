@@ -4,8 +4,8 @@ fn main() {
         println!("cargo:rerun-if-changed=assets/wte.manifest");
         winresource::WindowsResource::new()
             .set_icon("assets/wte.ico")
-            .set("ProductName", "Windows Theme Engine")
-            .set("FileDescription", "WTE · Windows Theme Engine")
+            .set("ProductName", "Window Theme Engine")
+            .set("FileDescription", "WTE · Window Theme Engine")
             .set("OriginalFilename", "wte.exe")
             .set_manifest_file("assets/wte.manifest")
             .compile()

@@ -333,7 +333,7 @@ impl App {
                     logo(ui.painter(), mark, p);
                     ui.label(title("WTE", 27.0));
                     if ui.available_width() > 880.0 {
-                        ui.label(muted("Windows Theme Engine"));
+                        ui.label(muted("Window Theme Engine"));
                     }
                     if !narrow {
                         self.navigation(ui, 120.0);
@@ -497,6 +497,7 @@ impl App {
             (selected.vscode, "VS Code"),
             (selected.nvim, "Neovim"),
             (selected.glaze, "GlazeWM"),
+            (selected.rillshift, "Rillshift"),
             (selected.terminal || selected.terminal_fit, "Terminal"),
             (selected.posh, "Oh My Posh"),
             (selected.chrome, "Chrome"),
@@ -1046,7 +1047,8 @@ fn components_section(ui: &mut Ui, t: &mut Theme) {
             ui.label(muted("Point your shell’s Oh My Posh configuration at the exported file once. Apply results includes the path."));
         }
         ui.checkbox(&mut t.glaze, "GlazeWM border colors");
-        if t.glaze {
+        ui.checkbox(&mut t.rillshift, "Rillshift borders and bar accent");
+        if t.glaze || t.rillshift {
             border_picker(ui, "Focused", t.palette.accent, &mut t.focused);
             border_picker(ui, "Unfocused", t.palette.surface, &mut t.unfocused);
         }

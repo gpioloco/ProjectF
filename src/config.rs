@@ -152,15 +152,23 @@ fn submap(parent: &Mapping, key: &str) -> Result<Mapping> {
         .with_context(|| format!("Expected a mapping at '{key}'"))
 }
 pub fn glazewm(input: &str, t: &Theme) -> Result<String> {
+    window_manager(input, t, false)
+}
+
+pub fn rillshift(input: &str, t: &Theme) -> Result<String> {
+    window_manager(input, t, true)
+}
+
+fn window_manager(input: &str, t: &Theme, include_bar_accent: bool) -> Result<String> {
     // Cross-check the lossless edit against the intended semantic edit before writing a user's YAML.
     let mut expected: serde_yaml_ng::Value = serde_yaml_ng::from_str(input)?;
     ensure!(
         expected.is_mapping(),
-        "GlazeWM config must be a YAML mapping"
+        "Window manager config must be a YAML mapping"
     );
     let file = YamlFile::from_str(input)?;
-    let doc = file.document().context("Empty GlazeWM config")?;
-    let root = doc.as_mapping().context("Invalid GlazeWM config")?;
+    let doc = file.document().context("Empty window manager config")?;
+    let root = doc.as_mapping().context("Invalid window manager config")?;
     let effects = submap(&root, "window_effects")?;
     for (key, color) in [
         ("focused_window", t.focused.unwrap_or(t.palette.accent)),
@@ -172,15 +180,39 @@ pub fn glazewm(input: &str, t: &Theme) -> Result<String> {
         let expected_border = &mut expected["window_effects"][key]["border"];
         expected_border["color"] = hex(color).into();
     }
+    if include_bar_accent {
+        // Rillshift accepts the legacy section as a serde alias. Keep its spelling.
+        let legacy = root.get("projectwm").is_some();
+        ensure!(
+            !(legacy && root.get("rillshift").is_some()),
+            "Both rillshift and projectwm sections exist"
+        );
+        let section = if legacy { "projectwm" } else { "rillshift" };
+        let bar = submap(&submap(&root, section)?, "bar")?;
+        let accent = t.palette.accent;
+        if let Some(seq) = bar.get_sequence("accent_color") {
+            ensure!(seq.len() == 3, "Expected three accent_color channels");
+            for (i, channel) in accent.into_iter().enumerate() {
+                seq.set(i, channel);
+            }
+        } else {
+            let seq = yaml_edit::Sequence::new_flow();
+            for channel in accent {
+                seq.push(channel);
+            }
+            bar.set("accent_color", seq);
+        }
+        expected[section]["bar"]["accent_color"] = serde_yaml_ng::to_value(accent)?;
+    }
     let output = file.to_string();
     ensure!(
         serde_yaml_ng::from_str::<serde_yaml_ng::Value>(&output)? == expected,
-        "Could not preserve the structure of this GlazeWM config."
+        "Could not preserve the structure of this window manager config."
     );
     Ok(output)
 }
 
-pub const NVIM_CONFIG_LOADER: &str = r#"-- Windows Theme Engine
+pub const NVIM_CONFIG_LOADER: &str = r#"-- Window Theme Engine
 if vim.g.loaded_wte_theme_engine then return end
 local package_dir = vim.fn.stdpath("data") .. "/site/pack/wte/start/wte"
 local loader = package_dir .. "/plugin/wte.vim"
@@ -190,7 +222,7 @@ if vim.fn.filereadable(loader) == 1 then
 end
 "#;
 
-pub const NVIM_PLUGIN: &str = r#"" Windows Theme Engine
+pub const NVIM_PLUGIN: &str = r#"" Window Theme Engine
 if exists('g:loaded_wte_theme_engine') | finish | endif
 let g:loaded_wte_theme_engine = 1
 let s:selection = expand('<sfile>:p:h:h') . '/active.txt'
@@ -223,7 +255,7 @@ pub fn nvim_palette(t: &Theme) -> String {
     let line = ink(exovoid::workbench("editorLineNumber.foreground"));
     let active_line = ink(exovoid::workbench("editorLineNumber.activeForeground"));
     let mut out = format!(
-        "\" Windows Theme Engine\nset termguicolors\nset background={}\nhighlight clear\nif exists('syntax_on') | syntax reset | endif\nlet g:colors_name = 'wte-palette'\n",
+        "\" Window Theme Engine\nset termguicolors\nset background={}\nhighlight clear\nif exists('syntax_on') | syntax reset | endif\nlet g:colors_name = 'wte-palette'\n",
         t.mode.label().to_ascii_lowercase()
     );
     for (groups, fore, back) in [

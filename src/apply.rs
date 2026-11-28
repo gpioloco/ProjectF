@@ -17,7 +17,7 @@ use std::path::{Path, PathBuf};
 
 /// Preserve the original bytes before replacing either application's existing settings.
 #[cfg(any(windows, test))]
-fn edit_settings(
+pub(crate) fn edit_settings(
     point: &mut RestorePoint,
     component: Component,
     path: &Path,
@@ -427,6 +427,11 @@ mod platform {
             .filter(|d| d.is_absolute())
             .map(|d| d.join("glazewm.exe"))
             .find(|p| p.is_file());
+        // The two managers share a command endpoint. GlazeWM's reload and
+        // redraw must not be sent to a running Rillshift instance.
+        if cli.is_some() && crate::rillshift::is_running() {
+            return "Saved the configuration. GlazeWM will read it at startup.".into();
+        }
         let run = |command| {
             cli.as_ref().is_some_and(|exe| {
                 Command::new(exe)
@@ -545,6 +550,9 @@ fn desktop_components(point: &mut RestorePoint, report: &mut Report, root: &Path
     if t.glaze {
         report.record("GlazeWM", platform::glaze(point, t, &backups));
     }
+    if t.rillshift {
+        report.record("Rillshift", crate::rillshift::apply(point, t, &backups));
+    }
     if backups.is_dir() {
         report.record(
             "Original settings",
@@ -580,7 +588,7 @@ pub fn run(root: &Path, t: &Theme) -> Result<Report> {
     #[cfg(windows)]
     desktop_components(&mut point, &mut report, root, t);
     #[cfg(not(windows))]
-    if t.desktop || t.vscode || t.nvim || t.glaze || t.terminal || t.terminal_fit {
+    if t.desktop || t.vscode || t.nvim || t.glaze || t.rillshift || t.terminal || t.terminal_fit {
         report.entries.push(Entry {
             component: "Desktop integrations",
             detail: "These components require Windows.".into(),
@@ -623,6 +631,8 @@ pub fn restore(root: &Path) -> Result<Report> {
         .join("backups")
         .join(format!("restore-{}", crate::unique_id()));
     let mut restored = Vec::new();
+    #[cfg(windows)]
+    let mut restored_rillshift = Vec::new();
     // Switch away from the installed theme before deleting its file. On failure
     // keep the desktop entries for a retry while restoring the other components.
     #[cfg(windows)]
@@ -685,6 +695,15 @@ pub fn restore(root: &Path) -> Result<Report> {
         };
         match result {
             Ok(()) => {
+                #[cfg(windows)]
+                if let Change::File {
+                    component: Component::Rillshift,
+                    path,
+                    ..
+                } = change
+                {
+                    restored_rillshift.push(path.clone());
+                }
                 point.finish(i)?;
                 if !restored.contains(&component) {
                     restored.push(component);
@@ -714,6 +733,16 @@ pub fn restore(root: &Path) -> Result<Report> {
             }
             #[cfg(not(windows))]
             Component::Glaze => "Restored the original configuration. Reload GlazeWM.",
+            #[cfg(windows)]
+            Component::Rillshift => {
+                report.record(
+                    component.name(),
+                    crate::rillshift::reload_restored(&restored_rillshift),
+                );
+                continue;
+            }
+            #[cfg(not(windows))]
+            Component::Rillshift => "Restored the Rillshift profile.",
             Component::Terminal => "Restored your Windows Terminal settings. Open a fresh tab.",
             Component::Posh => {
                 "Restored the previous prompt file. Reopen the shell. If your profile points directly to the removed WTE file, reselect your previous Oh My Posh config."
@@ -991,6 +1020,66 @@ mod tests {
             assert_eq!(fs::read_to_string(&path)?, text);
             assert!(!dir.path().join("backup").exists());
         }
+        Ok(())
+    }
+
+    #[test]
+    fn rillshift_applies_only_border_and_bar_colors_and_restores_the_profile() -> Result<()> {
+        let mut theme = Theme::preset(Photo::Canopy);
+        theme.focused = Some([1, 2, 3]);
+        theme.unfocused = Some([4, 5, 6]);
+        let root = tempfile::tempdir()?;
+        let path = root.path().join("config.yaml");
+        for section in ["rillshift", "projectwm"] {
+            let input = format!(
+                "# preserve this profile\nwindow_effects:\n  focused_window:\n    border: {{enabled: false, thickness: 4, color: '#222222'}}\n  other_windows:\n    border:\n      enabled: true\n{section}:\n  bar:\n    provider: built_in\n    accent_color: [8, 9, 10] # bar indicator\n    background_color: [22, 23, 24]\n"
+            );
+            fs::write(&path, &input)?;
+            let backups = root.path().join("backups/apply-test");
+            let mut point = RestorePoint::load(root.path())?;
+            let write = |point: &mut RestorePoint, t: &Theme| {
+                edit_settings(
+                    point,
+                    Component::Rillshift,
+                    &path,
+                    &backups,
+                    "rillshift-config.yaml",
+                    |yaml| config::rillshift(yaml, t),
+                )
+            };
+            assert!(write(&mut point, &theme)?);
+            let output = fs::read_to_string(&path)?;
+            assert!(
+                output.contains("# preserve this profile") && output.contains("# bar indicator")
+            );
+            let mut expected: serde_yaml_ng::Value = serde_yaml_ng::from_str(&input)?;
+            expected["window_effects"]["focused_window"]["border"]["color"] = "#010203".into();
+            expected["window_effects"]["other_windows"]["border"]["color"] = "#040506".into();
+            expected[section]["bar"]["accent_color"] =
+                serde_yaml_ng::to_value(theme.palette.accent)?;
+            assert_eq!(
+                serde_yaml_ng::from_str::<serde_yaml_ng::Value>(&output)?,
+                expected
+            );
+            assert!(!write(&mut point, &theme)?);
+            assert!(write(&mut point, &Theme::preset(Photo::Sienna))?);
+            let report = restore(root.path())?;
+            assert!(
+                report
+                    .entries
+                    .iter()
+                    .any(|e| e.component == "Rillshift" && !e.error)
+            );
+            assert_eq!(fs::read_to_string(&path)?, input);
+        }
+        let minimal = config::rillshift("general: {focus_follows_cursor: true}\n", &theme)?;
+        let y: serde_yaml_ng::Value = serde_yaml_ng::from_str(&minimal)?;
+        assert_eq!(
+            y["rillshift"]["bar"]["accent_color"],
+            serde_yaml_ng::to_value(theme.palette.accent)?
+        );
+        assert!(config::rillshift("rillshift: {}\nprojectwm: {}\n", &theme).is_err());
+        assert!(config::rillshift("rillshift: {bar: false}", &theme).is_err());
         Ok(())
     }
 

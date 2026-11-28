@@ -14,6 +14,7 @@ pub enum Component {
     Code,
     Neovim,
     Glaze,
+    Rillshift,
     Terminal,
     Posh,
     Chrome,
@@ -28,6 +29,7 @@ impl Component {
             Self::Terminal => "Windows Terminal",
             Self::Posh => "Oh My Posh",
             Self::Glaze => "GlazeWM",
+            Self::Rillshift => "Rillshift",
             Self::Chrome => "Chrome",
             Self::Firefox => "Firefox",
         }

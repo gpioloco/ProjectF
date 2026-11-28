@@ -5,10 +5,10 @@ resolver = "3"
 
 [package]
 name = "wte"
-version = "0.6.1"
+version = "0.7.0"
 edition = "2024"
 rust-version = "1.89"
-description = "Windows Theme Engine, a local desktop theme editor and switcher"
+description = "Window Theme Engine, a local desktop theme editor and switcher"
 
 [dependencies]
 anyhow = "1"

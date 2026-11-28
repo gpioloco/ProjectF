@@ -105,6 +105,8 @@ pub struct Theme {
     pub nvim: bool,
     pub glaze: bool,
     #[serde(default)]
+    pub rillshift: bool,
+    #[serde(default)]
     pub terminal: bool,
     #[serde(default)]
     pub terminal_fit: bool,
@@ -187,6 +189,7 @@ impl Theme {
             vscode: true,
             nvim: true,
             glaze: true,
+            rillshift: true,
             terminal: true,
             terminal_fit: false,
             posh: false,
@@ -259,6 +262,7 @@ impl Theme {
             self.desktop
                 || self.vscode
                 || self.nvim
+                || self.rillshift
                 || self.glaze
                 || self.terminal
                 || self.terminal_fit

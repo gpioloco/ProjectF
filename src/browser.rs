@@ -187,6 +187,7 @@ mod tests {
         t.vscode = false;
         t.nvim = false;
         t.glaze = false;
+        t.rillshift = false;
         t.terminal = false;
         assert!(t.validate().is_err());
         t.chrome = true;

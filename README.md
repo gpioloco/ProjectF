@@ -1,6 +1,6 @@
-# WTE · Windows Theme Engine
+# WTE · Window Theme Engine
 
-WTE is a Rust desktop app for Windows 11. Apply one palette across your wallpaper, Windows appearance, VS Code, Neovim, Windows Terminal and GlazeWM borders. Export a matching Oh My Posh prompt and themes for Chrome and Firefox. Start from one of three bundled presets or let WTE pick an accent and build a theme from a photograph. VS Code and Neovim share ExoVoid syntax colors in both modes, with darker ink for light backgrounds.
+WTE is a Rust desktop app for Windows 11. Apply one palette across your wallpaper, Windows appearance, VS Code, Neovim, Windows Terminal, GlazeWM borders, and Rillshift borders and bar accent. Export a matching Oh My Posh prompt and themes for Chrome and Firefox. Start from one of three bundled presets or let WTE pick an accent and build a theme from a photograph. VS Code and Neovim share ExoVoid syntax colors in both modes, with darker ink for light backgrounds.
 
 [Install WTE](#install-wte) · [Build from source](#build-from-source) · [Apply a preset](#apply-a-preset) · [Restore previous settings](#restore-previous-settings) · [Create a custom theme](#create-a-custom-theme) · [Browser setup](#load-a-browser-theme) · [Screenshots](#screenshot-gallery)
 
@@ -8,9 +8,9 @@ WTE is a Rust desktop app for Windows 11. Apply one palette across your wallpape
 
 ## Install WTE
 
-Run `WTE-0.6.1-windows-x64-setup.exe`, then open **Windows Theme Engine** from Start. Setup installs for your account in `%LOCALAPPDATA%\Programs\WTE`. To upgrade, close WTE and run the new installer. To uninstall, use **Settings → Apps → Installed apps → Windows Theme Engine**. Your saved themes, pictures and restore points stay in `%LOCALAPPDATA%\WTE`. If you also want to undo applied themes, use **Library → Restore** before uninstalling.
+Run `WTE-0.7.0-windows-x64-setup.exe`, then open **Window Theme Engine** from Start. Setup installs for your account in `%LOCALAPPDATA%\Programs\WTE`. To upgrade, close WTE and run the new installer. To uninstall, use **Settings → Apps → Installed apps → Window Theme Engine**. Your saved themes, pictures and restore points stay in `%LOCALAPPDATA%\WTE`. If you also want to undo applied themes, use **Library → Restore** before uninstalling.
 
-For portable use, extract `WTE-0.6.1-windows-x64.zip` and double-click `wte.exe`.
+For portable use, extract `WTE-0.7.0-windows-x64.zip` and double-click `wte.exe`.
 
 WTE opens in **Library**. Select a card to preview its wallpaper and use its palette throughout the app. The **App · Light** or **App · Dark** button switches the window appearance independently of the selected theme. WTE remembers both choices. The editor follows draft palette changes as you make them. Each integration is optional. The apply results identify any enabled integration WTE could not find.
 
@@ -35,7 +35,7 @@ Install NSIS 3 on the build machine. On Windows the packager checks the standard
 cargo installer
 ```
 
-Cargo builds the x64 Windows release and packages it as `target/dist/WTE-0.6.1-windows-x64-setup.exe`. A custom `CARGO_TARGET_DIR` moves the `dist` folder there. The installer contains the application, fonts, wallpapers and license notices. It runs offline with standard user permissions.
+Cargo builds the x64 Windows release and packages it as `target/dist/WTE-0.7.0-windows-x64-setup.exe`. A custom `CARGO_TARGET_DIR` moves the `dist` folder there. The installer contains the application, fonts, wallpapers and license notices. It runs offline with standard user permissions.
 
 ### From Linux for Windows x64
 
@@ -70,7 +70,7 @@ Run `cargo test --locked` from the repository root. With `nvim` on `PATH`, `carg
 2. To start from a preset instead, select its card and choose **New theme**. In the editor, **Choose local image…** replaces the wallpaper. **Use wallpaper colors** regenerates the six swatches from the selected image, including bundled wallpapers. You can tweak each swatch and rename the draft before saving.
 3. In **Color palette → Theme mode**, choose **Light** or **Dark** for this theme. Switching back restores the swatches you edited in that mode. **Use wallpaper colors** rebuilds both palettes from the photo. Dark themes use deeper accent and secondary swatches. WTE updates these two swatches in older dark palettes on upgrade. You can still edit their colors by hand.
 4. Adjust **Blur**, **Raindrops** and **Film grain** while watching the preview. The *Alpine Rain* example uses the Blue Hour photograph with blur at **8%**, raindrops at **74%** and film grain at **6%**. The effects render into a still wallpaper, so you can close WTE after applying it.
-5. **Accent** supplies the Windows accent and focused GlazeWM border. **Surface** supplies the unfocused border. Clear **Use palette** beside either border to choose its color independently.
+5. **Accent** supplies the Windows accent and Rillshift’s bar accent. It also supplies the focused border for GlazeWM and Rillshift. **Surface** supplies the unfocused border. Clear **Use palette** beside either border to choose its color independently.
 6. Under **Components**, select the applications to update. Leave the editor theme fields blank for ExoVoid syntax with wallpaper-based backgrounds, highlights and borders. Enter an installed VS Code theme or Neovim colorscheme name to use that editor's own theme.
 
 ![Alpine Rain in the theme editor with WTE in dark mode, a light code preview, wallpaper effects and both browser components selected](docs/screenshots/theme-editor.png)
@@ -87,10 +87,19 @@ Choose **Save theme** to copy the imported wallpaper to the local library and re
 | VS Code | WTE edits the default stable profile at `%APPDATA%\Code\User\settings.json`. Dark themes use **ExoVoid Classic Syntax - Dark Soft Blue**. Light themes use **WTE ExoVoid Light**, which keeps the same TextMate scopes, semantic token rules and font styles, and darkens the foreground colors. WTE scopes the palette overrides to the selected base. WTE preserves comments, unrelated settings and other theme scopes. Named profiles, workspace settings and automatic theme selection can take precedence. [VS Code theme settings](https://code.visualstudio.com/docs/configure/themes) |
 | Neovim | WTE asks the installed Neovim for its config and data directories. If the executable is missing, it looks for an existing profile in Local and Roaming AppData, including `NVIM_APPNAME` and XDG overrides. It writes the colorscheme and its loader under `stdpath('data')/site/pack/wte/start/wte` and adds `after/plugin/wte-theme-engine.lua` under `stdpath('config')` for plugin managers such as lazy.nvim. Classic highlights, Tree-sitter captures and LSP token groups use colors from the same ExoVoid theme. After the initial restart, changes load on startup or when the frontend delivers `FocusGained`. [Neovim packages](https://neovim.io/doc/user/pack/) |
 | GlazeWM v3 | WTE edits the colors of the focused and unfocused borders in `%USERPROFILE%\.glzr\glazewm\config.yaml` or the absolute path in `GLAZEWM_CONFIG_PATH`. The existing border enablement, tile gaps and window rules are preserved. When colors change, WTE requests a reload and redraw through the GlazeWM CLI. Border effects require Windows 11. [GlazeWM configuration](https://github.com/glzr-io/glazewm#config-window-effects) |
+| Rillshift | Updates the focused and inactive border colors and the built-in bar’s accent in the active YAML profile. WTE uses `rillshift-cli.exe` to identify the running manager and reload its profile. When Rillshift is closed, WTE checks `RILLSHIFT_CONFIG_PATH`, then `PROJECTWM_CONFIG_PATH`, then `%USERPROFILE%\.rillshift\config.yaml`. Start Rillshift once to create or migrate its default profile. |
 | Windows Terminal | WTE updates the named color scheme, profile defaults and explicit profile color overrides in existing Stable, Preview, Canary and unpackaged settings. It preserves JSONC comments. Presets include Terminal colors. Themes saved before 0.5 can opt in from the editor. [Windows Terminal settings paths](https://learn.microsoft.com/en-us/windows/terminal/faq#where-can-i-find-the-settings-file) |
 | Oh My Posh | Exports a local prompt with a path, Git branch and command marker. Its stable filename lets the same shell profile follow subsequent WTE themes. [Oh My Posh configuration](https://ohmyposh.dev/docs/installation/customize) |
 | Chrome | Updates one unpacked Manifest V3 theme with colors for the frame, toolbar, tabs, address bar and new tab page. Chrome picks up the latest palette on its next full launch. [Chrome theme format](https://developer.chrome.com/docs/extensions/develop/ui/themes) |
 | Firefox | Exports a static WebExtension theme as a single XPI with colors for the frame, toolbar, tabs, address bar and new tab page. It declares the theme’s light or dark color scheme. [Firefox theme format](https://developer.mozilla.org/en-US/docs/Mozilla/Add-ons/WebExtensions/manifest.json/theme) |
+
+### Rillshift colors
+
+Presets include Rillshift. For a previously saved theme, open **Edit theme → Components**, enable **Rillshift borders and bar accent**, then save and apply. Use **Focused** and **Unfocused** to override the two border colors. The bar’s active indicator always uses **Accent**. Rillshift’s existing border enablement, frame thickness, material, and bar provider determine which colors are visible. If the manager is paused, resume it and reload the profile. **Library → Restore** restores the original file and reloads the running manager when it uses that profile.
+
+The Sienna example below shows the Rillshift bar’s active Notepad indicator and the focused window’s top border. Captured with Rillshift 0.5.0 under Wine.
+
+![Rillshift bar with a copper Notepad indicator and a matching border above the Notepad menu](docs/screenshots/rillshift-sienna.png)
 
 ### First use with VS Code
 
@@ -148,6 +157,7 @@ Choose **Library → Restore → Restore settings**. WTE remembers each componen
 | --- | --- |
 | Windows desktop | WTE opens a saved copy of your previous desktop theme, through Windows Personalization. It restores the wallpaper, accent and appearance mode, and reapplies separately assigned monitor wallpapers. |
 | Windows Terminal, VS Code and GlazeWM | WTE restores the original config files byte for byte and removes a settings file it created. It asks VS Code to uninstall any theme extension it installed. Reload the editor window. WTE requests a GlazeWM reload when the CLI is available. |
+| Rillshift | WTE restores each edited profile from its original bytes. It reloads the active profile when Rillshift is running and unpaused. |
 | Neovim | WTE restores existing files and removes the package files and startup hook it added. Restart Neovim. To check the detected profile, compare the paths in **Apply results** with `:echo stdpath('config')` and `:echo stdpath('data')`. |
 | Oh My Posh | WTE restores the prior contents of the exported prompt file, or removes it if WTE created it. With the conditional setup above, the next shell uses your previous initialization. |
 | Chrome and Firefox | WTE restores the exported files. If you activated a theme in the browser, reselect your previous theme in Chrome’s **Appearance** settings or Firefox’s **Add-ons and themes**. |

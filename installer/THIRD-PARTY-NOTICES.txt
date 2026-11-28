@@ -1,4 +1,4 @@
-Windows Theme Engine — bundled Rust dependencies
+Window Theme Engine — bundled Rust dependencies
 
 ab_glyph 0.2.32  |  Apache-2.0
 https://github.com/alexheretic/ab-glyph
